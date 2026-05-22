@@ -16,7 +16,8 @@
   },
   "workspaces": [
     "packages/node",
-    "apps/landing"
+    "apps/landing",
+    "apps/mobile"
   ],
   "devDependencies": {
     "@types/node": "^25.5.2",
