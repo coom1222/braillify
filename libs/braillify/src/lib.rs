@@ -1,5 +1,6 @@
 mod char_shortcut;
 pub(crate) mod char_struct;
+pub mod decoder;
 #[cfg(feature = "cli")]
 pub mod cli;
 mod encoder;
@@ -112,6 +113,11 @@ pub fn encode_to_unicode(text: &str) -> Result<String, String> {
         .iter()
         .map(|c| unicode::encode_unicode(*c))
         .collect::<String>())
+}
+
+/// Decode Korean braille unicode string back to Korean text.
+pub fn decode(braille: &str) -> Result<String, String> {
+    decoder::decode(braille)
 }
 
 /// Unicode version of [`encode_with_formatting`].
