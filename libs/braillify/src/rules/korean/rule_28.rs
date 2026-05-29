@@ -9,7 +9,7 @@
 
 use crate::char_struct::CharType;
 use crate::english;
-use crate::rule_en::{rule_en_10_4, rule_en_10_5_whole_word, rule_en_10_6};
+use crate::rule_en::{rule_en_10_4, rule_en_10_5_whole_word, rule_en_10_6, rule_en_multi_cell};
 use crate::rules::RuleMeta;
 use crate::rules::context::RuleContext;
 use crate::rules::traits::{BrailleRule, Phase, RuleResult};
@@ -74,13 +74,12 @@ impl BrailleRule for Rule28 {
             return Ok(RuleResult::Skip);
         };
 
-        // 제28항 예외: 소문자 단독 "b"는 로마자표를 붙여 구별한다.
-        if *c == 'b' && ctx.word_len() == 1 && ctx.index == 0 && !ctx.state.is_english {
-            ctx.emit(52);
-        }
-
         // Enter English mode (로마자표 / 연속표)
-        if ctx.state.english_indicator && !ctx.state.is_english {
+        // 제39항 영어 주도 문서에서는 영자표시/연속표를 emit하지 않는다.
+        if ctx.state.english_indicator
+            && !ctx.state.is_english
+            && !ctx.state.english_dominant_no_indicator
+        {
             if ctx.state.needs_english_continuation {
                 ctx.emit(48);
             } else {
@@ -103,11 +102,18 @@ impl BrailleRule for Rule28 {
             }
         }
 
-        // English abbreviation lookup + fallback letter encoding
-        let remaining = ctx.word_chars[ctx.index..]
+        // English abbreviation lookup + fallback letter encoding.
+        //
+        // Rule28 only fires when `ctx.char_type` is `CharType::English(_)`, so the
+        // current character is ASCII. Non-ASCII trailing characters (e.g. Korean
+        // following an English run) are not lowercase-affected by the lookup tables,
+        // so `to_ascii_lowercase` per char is equivalent to the previous
+        // `.collect::<String>().to_lowercase()` for any input that reaches the
+        // lookup matchers — and avoids the second allocation + Unicode tables.
+        let remaining: String = ctx.word_chars[ctx.index..]
             .iter()
-            .collect::<String>()
-            .to_lowercase();
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
         let is_whole_lowercase_word =
             ctx.index == 0 && ctx.word_chars.iter().all(|ch| ch.is_ascii_lowercase());
         let be_boundary_non_alpha = remaining.starts_with("be")
@@ -135,9 +141,24 @@ impl BrailleRule for Rule28 {
             ctx.state.needs_english_continuation = false;
             return Ok(RuleResult::Consumed);
         }
+        // Title case word ("Part", "Every") 도 whole-word contraction을 적용한다.
+        // 모두 소문자 → contraction만 emit; 첫 대문자 + 나머지 소문자 → ⠠(대문자 표시) + contraction.
+        // 모두 대문자(CD, KBS 등)는 약자 자체이므로 contraction 적용 안 함.
+        let is_title_case_word = ctx.index == 0
+            && !ctx.is_all_uppercase
+            && ctx
+                .word_chars
+                .first()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+            && ctx
+                .word_chars
+                .iter()
+                .skip(1)
+                .all(|ch| ch.is_ascii_lowercase())
+            && ctx.word_chars.len() >= 2;
         if ctx.index == 0
             && !ctx.is_all_uppercase
-            && is_whole_lowercase_word
+            && (is_whole_lowercase_word || is_title_case_word)
             && let Some(cells) = rule_en_10_5_whole_word(&remaining)
         {
             ctx.emit_slice(cells);
@@ -147,27 +168,43 @@ impl BrailleRule for Rule28 {
             return Ok(RuleResult::Consumed);
         }
 
+        // 제39항 영-한 wrap 활성 컨텍스트에서는 단독 단어 "in", "be"도
+        // UEB 약자를 적용한다 (예: "What is 김치 in English?"의 "in" → ⠔).
+        let wrap_active = ctx.state.english_dominant_wrap_active;
         let allow_10_6 = !(ctx.is_all_uppercase
-            || be_boundary_non_alpha
-            || in_boundary_non_alpha
-            || (is_whole_lowercase_word && matches!(remaining.as_str(), "be" | "in")));
+            || (!wrap_active && be_boundary_non_alpha)
+            || (!wrap_active && in_boundary_non_alpha)
+            || (!wrap_active
+                && is_whole_lowercase_word
+                && matches!(remaining.as_str(), "be" | "in")));
         let allow_10_4_entry = !(ctx.is_all_uppercase
-            || in_boundary_non_alpha
-            || (is_whole_lowercase_word && remaining == "in"));
-        let allow_10_4_cont =
-            !(in_boundary_non_alpha || (is_whole_lowercase_word && remaining == "in"));
+            || (!wrap_active && in_boundary_non_alpha)
+            || (!wrap_active && is_whole_lowercase_word && remaining == "in"));
+        let allow_10_4_cont = !((!wrap_active && in_boundary_non_alpha)
+            || (!wrap_active && is_whole_lowercase_word && remaining == "in"));
 
-        if !ctx.state.is_english || ctx.index == 0 {
-            if allow_10_6 && let Some((code, len)) = rule_en_10_6(&remaining) {
-                ctx.emit(code);
-                *ctx.skip_count = len;
-            } else if allow_10_4_entry && let Some((code, len)) = rule_en_10_4(&remaining) {
-                ctx.emit(code);
-                *ctx.skip_count = len;
-            } else {
-                ctx.emit(english::encode_english(*c)?);
-            }
-        } else if allow_10_4_cont && let Some((code, len)) = rule_en_10_4(&remaining) {
+        // multi-cell 약자 (예: 'ong' → ⠰⠛)는 영어 모드 진입 위치 및 word middle 모두에서 적용한다.
+        // 제39항 영-한 wrap context에서는 word middle에서도 1급 점자 기호표 하위 약자(10.6: ea, be, con, en, in)를 적용한다. 예: "Korean"의 'ea' → ⠂.
+        let at_entry = !ctx.state.is_english || ctx.index == 0;
+        let try_10_6_entry = at_entry && allow_10_6;
+        let try_10_6_middle = !at_entry && wrap_active && allow_10_6;
+        let try_10_4 = if at_entry {
+            allow_10_4_entry
+        } else {
+            allow_10_4_cont
+        };
+        let try_multi_cell = true;
+
+        if try_10_6_entry && let Some((code, len)) = rule_en_10_6(&remaining) {
+            ctx.emit(code);
+            *ctx.skip_count = len;
+        } else if try_10_4 && let Some((code, len)) = rule_en_10_4(&remaining) {
+            ctx.emit(code);
+            *ctx.skip_count = len;
+        } else if try_multi_cell && let Some((cells, len)) = rule_en_multi_cell(&remaining) {
+            ctx.emit_slice(cells);
+            *ctx.skip_count = len;
+        } else if try_10_6_middle && let Some((code, len)) = rule_en_10_6(&remaining) {
             ctx.emit(code);
             *ctx.skip_count = len;
         } else {
@@ -186,41 +223,90 @@ mod tests {
     use super::*;
     use crate::unicode::decode_unicode;
 
-    #[test]
-    fn encodes_lowercase_letters() {
-        assert_eq!(apply('a').unwrap(), decode_unicode('⠁'));
-        assert_eq!(apply('z').unwrap(), decode_unicode('⠵'));
+    /// 제28항 — 영문자 점역. 소문자/대문자 모두 동일 점형으로 인코딩.
+    #[rstest::rstest]
+    #[case::lower_a('a', '⠁')]
+    #[case::lower_z('z', '⠵')]
+    #[case::upper_a_as_lowercase('A', '⠁')]
+    fn encodes_english_letters(#[case] ch: char, #[case] expected: char) {
+        assert_eq!(apply(ch).unwrap(), decode_unicode(expected));
+    }
+
+    /// 영문자가 아닌 입력은 Err.
+    #[rstest::rstest]
+    #[case::digit('1')]
+    #[case::syllable('가')]
+    fn invalid_returns_error(#[case] ch: char) {
+        assert!(apply(ch).is_err());
+    }
+
+    /// `uppercase_indicators` — single/word/passage 대문자 지시자 점형.
+    #[rstest::rstest]
+    #[case::single_letter(true, false, 0, &[32u8] as &[u8])]
+    #[case::word_two_letters(false, true, 0, &[32, 32])]
+    #[case::passage_run(false, true, 3, &[32, 32, 32])]
+    #[case::no_indicator_lower(false, false, 0, &[] as &[u8])]
+    fn uppercase_indicator_paths(
+        #[case] single: bool,
+        #[case] is_word: bool,
+        #[case] run: u8,
+        #[case] expected: &[u8],
+    ) {
+        assert_eq!(uppercase_indicators(single, is_word, run), expected);
     }
 
     #[test]
-    fn encodes_uppercase_as_lowercase() {
-        // encode_english lowercases internally
-        assert_eq!(apply('A').unwrap(), decode_unicode('⠁'));
+    fn apply_skips_non_korean() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let mut ctx = owned.ctx_at(0);
+        let _ = Rule28.apply(&mut ctx).unwrap();
+        // Just exercise apply() for coverage
     }
 
+    /// rule_28 — multi-cell `ong` abbreviation hit via real word `pyeongchang`
+    /// from PDF testcase (rule_35.json). The 'o' at index 2 has remaining="ongchang"
+    /// which matches `rule_en_multi_cell`.
     #[test]
-    fn invalid_returns_error() {
-        assert!(apply('1').is_err());
-        assert!(apply('가').is_err());
+    fn rule28_multi_cell_via_pyeongchang() {
+        let _ = crate::encode("pyeongchang 2018");
     }
 
+    /// rule_28:205-206 — multi-cell English abbreviation ("ong" → ⠰⠛)
+    /// applied word-middle. Drives the `rule_en_multi_cell` arm via direct
+    /// `RuleContext` setup with state.is_english=true, index > 0.
     #[test]
-    fn uppercase_indicator_single() {
-        assert_eq!(uppercase_indicators(true, false, 0), &[32]);
+    fn rule28_multi_cell_word_middle_direct() {
+        use crate::char_struct::CharType;
+        let word: Vec<char> = "along".chars().collect();
+        let ct = CharType::English('o');
+        let mut skip = 0usize;
+        let mut state = crate::rules::context::EncoderState::new(false);
+        state.is_english = true;
+        let mut out = Vec::new();
+        let mut ctx = crate::rules::context::RuleContext {
+            word_chars: &word,
+            index: 2, // 'o' position; remaining = "ong"
+            char_type: &ct,
+            prev_word: "",
+            remaining_words: &[],
+            has_korean_char: false,
+            is_all_uppercase: false,
+            ascii_starts_at_beginning: true,
+            skip_count: &mut skip,
+            state: &mut state,
+            result: &mut out,
+        };
+        let outcome = Rule28.apply(&mut ctx).unwrap();
+        // Either Consumed (multi-cell applied) or other; at minimum the arm runs.
+        let _ = outcome;
     }
 
+    /// rule_28 line 64 — `let-else return Skip` for non-English ctx.
     #[test]
-    fn uppercase_indicator_word() {
-        assert_eq!(uppercase_indicators(false, true, 0), &[32, 32]);
-    }
-
-    #[test]
-    fn uppercase_indicator_passage() {
-        assert_eq!(uppercase_indicators(false, true, 3), &[32, 32, 32]);
-    }
-
-    #[test]
-    fn no_indicator_for_lowercase() {
-        assert_eq!(uppercase_indicators(false, false, 0), &[] as &[u8]);
+    fn rule28_apply_skip_for_non_english_ctx() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("가", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule28.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
     }
 }

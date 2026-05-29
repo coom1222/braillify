@@ -30,7 +30,7 @@ export default function Pages({ isIntersecting }: { isIntersecting: boolean }) {
           href="/docs/overview"
         >
           <Flex alignItems="center" p="40px">
-            <Center gap="10px" role="group">
+            <Center data-group gap="10px">
               <Box
                 _groupActive={{
                   bg: '$text',
@@ -63,7 +63,7 @@ export default function Pages({ isIntersecting }: { isIntersecting: boolean }) {
           href="/test-case"
         >
           <Flex alignItems="center" p="40px">
-            <Center gap="10px" role="group">
+            <Center data-group gap="10px">
               <Box
                 _groupActive={{
                   bg: '$text',
@@ -96,7 +96,7 @@ export default function Pages({ isIntersecting }: { isIntersecting: boolean }) {
           href="/team"
         >
           <Flex alignItems="center" p="40px">
-            <Center gap="10px" role="group">
+            <Center data-group gap="10px">
               <Box
                 _groupActive={{
                   bg: '$text',

@@ -115,4 +115,12 @@ mod tests {
         assert_eq!(decode_unicode('⠴'), LETTER_MARKER);
         assert_eq!(decode_unicode('⠈'), CURRENCY_MARKER);
     }
+
+    #[test]
+    fn apply_skips_non_korean() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule65.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
+    }
 }

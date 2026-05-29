@@ -1,11 +1,12 @@
 [package]
 name = "dotnet"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "braillify_native"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 braillify = { path = "../../libs/braillify", default-features = false }

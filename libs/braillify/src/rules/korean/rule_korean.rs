@@ -79,4 +79,13 @@ mod tests {
         assert_eq!(META.section, "1");
         assert_eq!(META.subsection, Some("general"));
     }
+
+    /// rule_korean line 45 — `let-else return Skip` for non-Korean ctx.
+    #[test]
+    fn rule_korean_apply_skip_for_non_korean_ctx() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = RuleKorean.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
+    }
 }

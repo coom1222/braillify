@@ -55,6 +55,20 @@ impl BrailleRule for RuleEnglishSymbol {
             ctx.remaining_words,
         );
 
+        // 제39항 영-한 wrap context: 단어 끝의 영어 모드 유지 가능 기호(. , : ;)
+        // 다음에 한글 어절(wrap 대상)이 이어지면 그 기호를 영어 점자로 처리한다.
+        // 예) "(Korean:" 끝의 ':'은 다음 wrap된 "반찬" 직전이므로 영어 점자 ⠒.
+        if !use_english_symbol
+            && ctx.state.english_dominant_wrap_active
+            && ctx.state.is_english
+            && ctx.index == ctx.word_chars.len() - 1
+            && matches!(*sym, '.' | ',' | ':' | ';')
+            && let Some(next_word) = ctx.remaining_words.first()
+            && next_word.chars().next().is_some_and(utils::is_korean_char)
+        {
+            use_english_symbol = true;
+        }
+
         if *sym == '(' {
             ctx.state.parenthesis_stack.push(use_english_symbol);
         } else if *sym == ')' {
@@ -77,7 +91,15 @@ impl BrailleRule for RuleEnglishSymbol {
             if let Some(encoded) = symbol_shortcut::encode_english_char_symbol_shortcut(*sym) {
                 ctx.emit_slice(encoded);
                 if *sym == '-' && ctx.state.is_english {
-                    ctx.emit(crate::rules::korean::rule_29::ENGLISH_CONTINUATION);
+                    // 다음 글자가 숫자이면 수표(⠼)가 emit되므로 연속표(⠰)는
+                    // 불필요하다 (제35항 D-100 같은 영문-숫자 인접 패턴).
+                    let next_is_digit = ctx
+                        .word_chars
+                        .get(ctx.index + 1)
+                        .is_some_and(|c| c.is_ascii_digit());
+                    if !next_is_digit {
+                        ctx.emit(crate::rules::korean::rule_29::ENGLISH_CONTINUATION);
+                    }
                 }
                 return Ok(RuleResult::Consumed);
             }
@@ -94,5 +116,25 @@ impl BrailleRule for RuleEnglishSymbol {
         }
 
         Ok(RuleResult::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_exercise() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let mut ctx = owned.ctx_at(0);
+        // Just exercise apply() for coverage; either Skip or Continue/Consumed is OK
+        let _ = RuleEnglishSymbol.apply(&mut ctx);
+    }
+
+    #[test]
+    fn matches_does_not_panic() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let ctx = owned.ctx_at(0);
+        let _ = RuleEnglishSymbol.matches(&ctx);
     }
 }

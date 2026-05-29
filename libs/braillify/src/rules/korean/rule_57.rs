@@ -114,15 +114,128 @@ impl BrailleRule for Rule57 {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn groups_repeated_symbols() {
-        assert_eq!(crate::encode_to_unicode("김○○ 씨").unwrap(), "⠈⠕⠢⠸⠴⠴⠇⠀⠠⠠⠕");
-        assert_eq!(crate::encode_to_unicode("△△도서관").unwrap(), "⠸⠬⠬⠇⠊⠥⠠⠎⠈⠧⠒");
+    /// 제57항 — 반복 기호 그룹화 (`○○`, `△△` 등).
+    #[rstest::rstest]
+    #[case::kim_circle_circle_ssi("김○○ 씨", "⠈⠕⠢⠸⠴⠴⠇⠀⠠⠠⠕")]
+    #[case::triangle_triangle_doseogwan("△△도서관", "⠸⠬⠬⠇⠊⠥⠠⠎⠈⠧⠒")]
+    fn groups_repeated_symbols(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
     }
 
+    /// 제57항 — `×` 가 수학 곱셈 vs 일반 기호 문맥에 따라 다르게 점역.
+    #[rstest::rstest]
+    #[case::math_multiplication("5×3", "⠼⠑⠡⠼⠉")]
+    #[case::general_times_symbol("×란", "⠸⠭⠇⠐⠣⠒")]
+    fn handles_times_dual_context(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    use super::*;
+
+    /// 제57항 — `is_math_times_context` short-circuits when current char is not `×`
+    /// (line 33-36).
     #[test]
-    fn handles_times_dual_context() {
-        assert_eq!(crate::encode_to_unicode("5×3").unwrap(), "⠼⠑⠡⠼⠉");
-        assert_eq!(crate::encode_to_unicode("×란").unwrap(), "⠸⠭⠇⠐⠣⠒");
+    fn is_math_times_context_returns_false_for_non_times() {
+        use crate::char_struct::CharType;
+        let word: Vec<char> = "a".chars().collect();
+        let ct = CharType::Symbol('a');
+        let mut skip = 0usize;
+        let mut state = crate::rules::context::EncoderState::new(false);
+        let mut out = Vec::new();
+        let ctx = crate::rules::context::RuleContext {
+            word_chars: &word,
+            index: 0,
+            char_type: &ct,
+            prev_word: "",
+            remaining_words: &[],
+            has_korean_char: false,
+            is_all_uppercase: false,
+            ascii_starts_at_beginning: false,
+            skip_count: &mut skip,
+            state: &mut state,
+            result: &mut out,
+        };
+        assert!(!is_math_times_context(&ctx));
+    }
+
+    /// 제57항 — `is_placeholder_times_context` short-circuits for non-`×` chars
+    /// (line 46-49).
+    #[test]
+    fn is_placeholder_times_context_returns_false_for_non_times() {
+        use crate::char_struct::CharType;
+        let word: Vec<char> = "a".chars().collect();
+        let ct = CharType::Symbol('a');
+        let mut skip = 0usize;
+        let mut state = crate::rules::context::EncoderState::new(false);
+        let mut out = Vec::new();
+        let ctx = crate::rules::context::RuleContext {
+            word_chars: &word,
+            index: 0,
+            char_type: &ct,
+            prev_word: "",
+            remaining_words: &[],
+            has_korean_char: false,
+            is_all_uppercase: false,
+            ascii_starts_at_beginning: false,
+            skip_count: &mut skip,
+            state: &mut state,
+            result: &mut out,
+        };
+        assert!(!is_placeholder_times_context(&ctx));
+    }
+
+    /// 제57항 — apply path where MathSymbol(×) is in non-placeholder context
+    /// returns `Skip` (line 88-90).
+    #[test]
+    fn rule57_apply_math_times_context_returns_skip() {
+        use crate::char_struct::CharType;
+        // "5×3": × at idx 1, prev=5, next=3 → is_math_times_context = true
+        let word: Vec<char> = "5×3".chars().collect();
+        let ct = CharType::MathSymbol('×');
+        let mut skip = 0usize;
+        let mut state = crate::rules::context::EncoderState::new(false);
+        let mut out = Vec::new();
+        let mut ctx = crate::rules::context::RuleContext {
+            word_chars: &word,
+            index: 1,
+            char_type: &ct,
+            prev_word: "",
+            remaining_words: &[],
+            has_korean_char: false,
+            is_all_uppercase: false,
+            ascii_starts_at_beginning: false,
+            skip_count: &mut skip,
+            state: &mut state,
+            result: &mut out,
+        };
+        let outcome = Rule57.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
+    }
+
+    /// 제57항 — apply path falls through to `placeholder_mark` returning None
+    /// (line 92-94). Force by giving a Symbol char that isn't in placeholder_mark.
+    #[test]
+    fn rule57_apply_unknown_symbol_skips() {
+        use crate::char_struct::CharType;
+        let word: Vec<char> = "a".chars().collect();
+        let ct = CharType::Symbol('a');
+        let mut skip = 0usize;
+        let mut state = crate::rules::context::EncoderState::new(false);
+        let mut out = Vec::new();
+        let mut ctx = crate::rules::context::RuleContext {
+            word_chars: &word,
+            index: 0,
+            char_type: &ct,
+            prev_word: "",
+            remaining_words: &[],
+            has_korean_char: false,
+            is_all_uppercase: false,
+            ascii_starts_at_beginning: false,
+            skip_count: &mut skip,
+            state: &mut state,
+            result: &mut out,
+        };
+        let outcome = Rule57.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
     }
 }

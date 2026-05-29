@@ -1,0 +1,7 @@
+---
+source: libs/braillify/tests/coverage_extra2.rs
+expression: rendered
+---
+input  = "f'(x)"
+unicode = ok: "⠋⠠⠦⠦⠄⠭⠠⠴"
+bytes   = ok: [11, 32, 38, 38, 4, 45, 32, 52]

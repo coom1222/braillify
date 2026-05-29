@@ -170,4 +170,54 @@ mod tests {
         assert_eq!(META.section, "11");
         assert_eq!(META.name, "vowel_ye_separator");
     }
+
+    use rstest::rstest;
+
+    /// Build context that includes a 2-char word so next_char() works.
+    fn ctx_for_pair(syllable_pair: &str) -> crate::test_helpers::CtxOwned {
+        crate::test_helpers::CtxOwned::for_text(syllable_pair, false)
+    }
+
+    #[rstest]
+    #[case("아예", true)] // ㅇ+ㅏ → ㅇ+ㅖ
+    #[case("도예", true)] // ㄷ+ㅗ → ㅇ+ㅖ
+    #[case("본예", false)] // current has jong (ㄴ)
+    #[case("아이", false)] // next is 이, not 예
+    fn rule11_matches_vowel_ye_pattern(#[case] input: &str, #[case] expected: bool) {
+        let mut owned = ctx_for_pair(input);
+        let ctx = owned.ctx_at(0);
+        assert_eq!(Rule11.matches(&ctx), expected, "input={input}");
+    }
+
+    #[test]
+    fn rule11_apply_emits_separator() {
+        let mut owned = ctx_for_pair("아예");
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule11.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Continue));
+        assert_eq!(owned.result, vec![SEPARATOR]);
+    }
+
+    #[test]
+    fn rule11_phase_and_priority() {
+        assert!(matches!(Rule11.phase(), Phase::InterCharacter));
+        assert_eq!(Rule11.priority(), 100);
+    }
+
+    /// rule_11 line 53 — `let-else return false` for non-Korean ctx.
+    #[test]
+    fn rule11_matches_false_for_non_korean_ctx() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("Ax", false);
+        let ctx = owned.ctx_at(0);
+        assert!(!Rule11.matches(&ctx));
+    }
+
+    /// rule_11 line 59 — `let-else return false` when no next char.
+    #[test]
+    fn rule11_matches_false_at_end_of_word() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("아", false);
+        let ctx = owned.ctx_at(0);
+        // Single Korean char, no next → next_char() returns None.
+        assert!(!Rule11.matches(&ctx));
+    }
 }

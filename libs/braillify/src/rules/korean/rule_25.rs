@@ -91,3 +91,48 @@ impl BrailleRule for Rule25 {
         Ok(RuleResult::Consumed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_skips_non_korean() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule25.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
+    }
+
+    /// 제25항 — 중세국어 모음 ㆍ (아래아) standalone emits the legacy mapping.
+    /// Triggers the MAPPINGS-found branch (line 86-91).
+    #[test]
+    fn apply_emits_for_middle_korean_vowel() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("ㆍ", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule25.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert!(!owned.result.is_empty());
+    }
+
+    /// 제25항 — SILENT_HANJA characters (輪/王/養/砌) are silently consumed
+    /// without emission (line 83-85).
+    #[test]
+    fn apply_silent_hanja_consumed_without_emit() {
+        // '砌' is one of the SILENT_HANJA entries. Its CharType is Symbol.
+        let mut owned = crate::test_helpers::CtxOwned::for_text("砌", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule25.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert!(owned.result.is_empty());
+    }
+
+    /// 제25항 — Symbol char that is not in MAPPINGS reaches Skip (line 86-88).
+    #[test]
+    fn apply_skip_when_not_in_mappings() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text(".", false);
+        let mut ctx = owned.ctx_at(0);
+        let outcome = Rule25.apply(&mut ctx).unwrap();
+        assert!(matches!(outcome, RuleResult::Skip));
+    }
+}
