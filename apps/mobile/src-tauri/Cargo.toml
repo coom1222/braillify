@@ -3,8 +3,8 @@
 [package]
 name = "braillify_app"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Braillify mobile app"
+authors = ["devfive"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -24,4 +24,3 @@ tauri = { version = "2", features = [] }
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-

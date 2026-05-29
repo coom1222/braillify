@@ -4,9 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "check": "tsc && cargo check --manifest-path src-tauri/Cargo.toml",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "ios:dev": "tauri ios dev",
+    "ios:run": "tauri ios run",
+    "ios:build": "tauri ios build",
     "tauri": "tauri"
   },
   "dependencies": {
