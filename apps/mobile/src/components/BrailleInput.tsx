@@ -17,8 +17,10 @@ function parseToCells(raw: string): number[] {
     const code = ch.codePointAt(0) ?? 0;
     if (code >= BRAILLE_START && code <= BRAILLE_END) {
       result.push(code - BRAILLE_START);
+    } else if (ch === " " || ch === "\n") {
+      result.push(0); // 일반 공백·줄바꿈 → ⠀(U+2800) 점자 공백으로 보존
     }
-    // 그 외 문자(일반 공백 포함)는 무시 — ⠀(U+2800)만 점자 공백으로 허용
+    // 그 외 문자는 무시
   }
   return result;
 }
@@ -87,7 +89,8 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
           _focus={{ borderColor: "$primary" }}
         />
         <Text fontSize="11px" color="$textSubtle" mt="4px">
-          일반 키보드로는 점자 문자를 직접 타이핑하기 어려우므로 주로 붙여넣기용입니다.
+          일반 키보드로는 점자 문자를 직접 타이핑하기 어려우므로 주로
+          붙여넣기용입니다.
         </Text>
       </Box>
 
