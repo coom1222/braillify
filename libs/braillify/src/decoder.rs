@@ -439,5 +439,9 @@ mod tests {
         // 단어 안에서도 동작
         assert_eq!(roundtrip("까다"), "까다");
         assert_eq!(roundtrip("짜다"), "짜다");
+        // 실제 단어: 된소리 + 종성 + 후속 음절 조합
+        assert_eq!(roundtrip("껐어요"), "껐어요"); // ㄲ+ㅓ+ㅆ 종성 + 어요
+        assert_eq!(roundtrip("아까"), "아까");     // 단어 중간에 된소리
+        assert_eq!(roundtrip("기쁘다"), "기쁘다"); // ㅃ(된소리ㅂ) 포함 단어
     }
 }
