@@ -14,9 +14,7 @@ export function TranslatorPage() {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<TranslateMode>("general");
   const [result, setResult] = useState<ResultState>({ kind: "idle" });
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
-    "idle",
-  );
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   function handleTranslate() {
     const r = translate(text, mode);
@@ -66,7 +64,7 @@ export function TranslatorPage() {
         mb="16px"
         gap="4px"
       >
-        {(["general", "math"] as const).map((m) => {
+        {(["general", "math"] as const).map(m => {
           const active = mode === m;
           return (
             <Box
@@ -118,7 +116,7 @@ export function TranslatorPage() {
         <Box py="8px">
           <Textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={e => setText(e.target.value)}
             rows={4}
             placeholder={
               mode === "math"
@@ -168,9 +166,14 @@ export function TranslatorPage() {
         aria-live="polite"
       >
         {result.kind === "idle" && (
-          <Text color="$textMuted" fontSize="14px">
-            텍스트를 입력하고 점역을 시작해보세요
-          </Text>
+          <Flex flexDirection="column">
+            <Text color="#2B2B2B80" fontSize="36px" marginBottom="2px">
+              ⠃⠗⠁⠊⠇⠇⠊⠋⠽
+            </Text>
+            <Text color="$textMuted" fontSize="14px">
+              텍스트를 입력하고 점역을 시작해보세요
+            </Text>
+          </Flex>
         )}
         {result.kind === "ok" && (
           <Flex flexDirection="column" alignItems="center" gap="16px" w="100%">
@@ -197,11 +200,7 @@ export function TranslatorPage() {
               fontWeight={500}
               onClick={handleCopy}
             >
-              {copyState === "copied"
-                ? "복사됨"
-                : copyState === "error"
-                  ? "복사 실패"
-                  : "복사"}
+              {copyState === "copied" ? "복사됨" : copyState === "error" ? "복사 실패" : "복사"}
             </Box>
           </Flex>
         )}
