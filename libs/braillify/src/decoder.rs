@@ -55,9 +55,9 @@ fn decode_bytes(bytes: &[u8]) -> Result<String, String> {
                 } else if let Some((jung, consumed)) = try_jungseong(bytes, i) {
                     stage = Stage::GotJung(11, jung); // silent ㅇ
                     i += consumed;
-                } else if let Some(cho) = try_choseong(b) {
+                } else if let Some((cho, consumed)) = try_choseong_with_double(bytes, i) {
                     stage = Stage::GotCho(cho);
-                    i += 1;
+                    i += consumed;
                 } else {
                     i += 1; // skip unknown byte
                 }
@@ -124,11 +124,11 @@ fn decode_bytes(bytes: &[u8]) -> Result<String, String> {
                     stage = Stage::GotJung(cho2, 0);
                     i += 1;
                 }
-                // Priority 6: choseong starts next syllable
-                else if let Some(new_cho) = try_choseong(b) {
+                // Priority 6: choseong starts next syllable (incl. tense consonants)
+                else if let Some((new_cho, consumed)) = try_choseong_with_double(bytes, i) {
                     result.push(build_syllable(cho, jung, 0));
                     stage = Stage::GotCho(new_cho);
-                    i += 1;
+                    i += consumed;
                 }
                 // Priority 7: consecutive vowel → emit current, silent ㅇ + new vowel
                 else if let Some((new_jung, consumed)) = try_jungseong(bytes, i) {
@@ -230,6 +230,38 @@ fn try_choseong(b: u8) -> Option<u32> {
         48 => Some(14), // ㅊ
         _  => None,
     }
+}
+
+// ── Double (tense) choseong — 제2항 된소리 ───────────────────────────────
+// 된소리표 ⠠ (byte 32) + base consonant byte → tense choseong.
+//   32 + 8  → ㄲ (idx 1)
+//   32 + 10 → ㄸ (idx 4)
+//   32 + 24 → ㅃ (idx 8)
+//   32 + 32 → ㅆ (idx 10)
+//   32 + 40 → ㅉ (idx 13)
+// Falls back to try_choseong (single byte, ㅅ) if not a double pair.
+fn try_choseong_with_double(bytes: &[u8], i: usize) -> Option<(u32, usize)> {
+    let b0 = *bytes.get(i)?;
+    if b0 == 32 {
+        if let Some(&b1) = bytes.get(i + 1) {
+            // 된소리표(32) 뒤에 오는 바이트 패턴:
+            //  ㅏ 모음: 된소리표 + 약자 바이트 (가=43, 사=7, 나/다/바/자는 공유)
+            //  기타 모음: 된소리표 + 초성 바이트 (ㄱ=8, ㅅ=32) + 별도 중성
+            // 예) 까=[32,43]  꺼=[32,8,14]  싸=[32,7]  쏘=[32,32,37]
+            let double_idx = match b1 {
+                8  | 43 => Some(1),  // ㄲ: 8=ㄱ초성(꺼·끼…), 43=가약자(까)
+                10      => Some(4),  // ㄸ: 공유바이트 (따·뚜… 모두)
+                24      => Some(8),  // ㅃ: 공유바이트 (빠·뿌… 모두)
+                7  | 32 => Some(10), // ㅆ: 7=사약자(싸), 32=ㅅ초성(쏘·씩…)
+                40      => Some(13), // ㅉ: 공유바이트 (짜·쭈… 모두)
+                _       => None,
+            };
+            if let Some(idx) = double_idx {
+                return Some((idx, 2));
+            }
+        }
+    }
+    try_choseong(b0).map(|idx| (idx, 1))
 }
 
 // ── Jungseong ────────────────────────────────────────────────────────────
@@ -385,5 +417,27 @@ mod tests {
     #[test]
     fn test_geo_seong() {
         assert_eq!(roundtrip("거성"), "거성");
+    }
+
+    fn to_bytes(s: &str) -> Vec<u8> {
+        s.chars().filter_map(|c| {
+            let code = c as u32;
+            if code >= 0x2800 { Some((code - 0x2800) as u8) } else { None }
+        }).collect()
+    }
+
+    #[test]
+    fn test_tense_consonants() {
+        // ㅏ 모음: 된소리표 + 약자/공유 바이트 (compact form)
+        for word in &["까", "따", "빠", "싸", "짜"] {
+            assert_eq!(&roundtrip(word), word, "failed on: {word}");
+        }
+        // ㅏ 외 모음: 된소리표 + 초성 바이트 + 별도 중성
+        assert_eq!(roundtrip("꺼"), "꺼"); // ㄲ+ㅓ → [32,8,14]
+        assert_eq!(roundtrip("뚜"), "뚜"); // ㄸ+ㅜ → [32,10,13]
+        assert_eq!(roundtrip("쏘"), "쏘"); // ㅆ+ㅗ → [32,32,37]
+        // 단어 안에서도 동작
+        assert_eq!(roundtrip("까다"), "까다");
+        assert_eq!(roundtrip("짜다"), "짜다");
     }
 }
