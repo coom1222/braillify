@@ -2,12 +2,19 @@ import { useState } from "react";
 import { Box, Flex, Text } from "@devup-ui/react";
 import { Textarea } from "@devup-ui/components";
 import { translate, translateReverse } from "../lib/translate";
-import { pushHistory, type TranslateMode } from "../lib/history";
+import { pushHistory } from "../lib/history";
 import { copyText } from "../lib/clipboard";
 import { masksToString } from "../lib/braille";
 import { BrailleInput } from "../components/BrailleInput";
 
-type Direction = "forward" | "reverse";
+// 3가지 모드를 하나의 타입으로 통합
+type PageMode = "general" | "math" | "reverse";
+
+const MODE_OPTIONS: { value: PageMode; label: string }[] = [
+  { value: "general", label: "일반" },
+  { value: "math",    label: "수학" },
+  { value: "reverse", label: "역점역" },
+];
 
 type ResultState =
   | { kind: "idle" }
@@ -15,32 +22,36 @@ type ResultState =
   | { kind: "error"; message: string };
 
 export function TranslatorPage() {
-  const [text, setText] = useState("");
-  const [cells, setCells] = useState<number[]>([]); // 역점역 입력용 점자 셀 배열
-  const [direction, setDirection] = useState<Direction>("forward");
-  const [mode, setMode] = useState<TranslateMode>("general");
-  const [result, setResult] = useState<ResultState>({ kind: "idle" });
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
-    "idle",
-  );
+  const [pageMode, setPageMode] = useState<PageMode>("general");
+  const [text, setText]         = useState("");
+  const [cells, setCells]       = useState<number[]>([]);
+  const [result, setResult]     = useState<ResultState>({ kind: "idle" });
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
-  // 역점역 모드에서 실제 점역할 문자열
-  const reverseBraille = masksToString(cells);
+  const isReverse = pageMode === "reverse";
+
   // 번역 버튼 활성화 조건
-  const canTranslate =
-    direction === "forward" ? !!text.trim() : cells.length > 0;
+  const canTranslate = isReverse ? cells.length > 0 : !!text.trim();
+
+  function handleModeChange(next: PageMode) {
+    setPageMode(next);
+    setText("");
+    setCells([]);
+    setResult({ kind: "idle" });
+  }
 
   function handleTranslate() {
-    if (direction === "forward") {
-      const r = translate(text, mode);
+    if (!isReverse) {
+      const translateMode = pageMode === "math" ? "math" : "general";
+      const r = translate(text, translateMode);
       if (r.ok) {
         setResult({ kind: "ok", output: r.braille });
-        pushHistory({ source: text, braille: r.braille, mode });
+        pushHistory({ source: text, braille: r.braille, mode: translateMode });
       } else {
         setResult({ kind: "error", message: r.error });
       }
     } else {
-      const r = translateReverse(reverseBraille);
+      const r = translateReverse(masksToString(cells));
       if (r.ok) {
         setResult({ kind: "ok", output: r.korean });
       } else {
@@ -62,30 +73,20 @@ export function TranslatorPage() {
     }
   }
 
-  function handleModeChange(next: TranslateMode) {
-    setMode(next);
-    setResult({ kind: "idle" });
-  }
-
-  function handleDirectionChange(next: Direction) {
-    setDirection(next);
-    setText("");
-    setCells([]);
-    setResult({ kind: "idle" });
-  }
-
   return (
     <Box px="20px" py="24px">
       <Text as="h1" fontSize="24px" fontWeight={700} m={0} mb="6px">
         점역기
       </Text>
       <Text as="p" m={0} mb="16px" color="$textMuted" fontSize="14px">
-        {direction === "forward"
-          ? "한글 텍스트를 입력하면 2024 개정 한국 점자 규정에 따라 점역합니다."
-          : "점을 눌러 점자를 조합하고 역점역합니다."}
+        {isReverse
+          ? "점을 눌러 점자를 조합하고 역점역합니다."
+          : pageMode === "math"
+            ? "LaTeX 수식을 $...$로 감싸 입력하면 수학 점자로 변환합니다."
+            : "한글 텍스트를 입력하면 2024 개정 한국 점자 규정에 따라 점역합니다."}
       </Text>
 
-      {/* Direction toggle */}
+      {/* 모드 토글: 일반 | 수학 | 역점역 */}
       <Flex
         display="inline-flex"
         bg="$surface"
@@ -93,14 +94,14 @@ export function TranslatorPage() {
         borderColor="$border"
         borderRadius="999px"
         p="4px"
-        mb="12px"
+        mb="16px"
         gap="4px"
       >
-        {(["forward", "reverse"] as const).map((d) => {
-          const active = direction === d;
+        {MODE_OPTIONS.map(({ value, label }) => {
+          const active = pageMode === value;
           return (
             <Box
-              key={d}
+              key={value}
               as="button"
               type="button"
               role="tab"
@@ -113,52 +114,13 @@ export function TranslatorPage() {
               fontWeight={active ? 600 : 500}
               bg={active ? "$primary" : "transparent"}
               color={active ? "$primaryText" : "$textMuted"}
-              onClick={() => handleDirectionChange(d)}
+              onClick={() => handleModeChange(value)}
             >
-              {d === "forward" ? "정점역" : "역점역"}
+              {label}
             </Box>
           );
         })}
       </Flex>
-
-      {/* Mode toggle — 정점역일 때만 표시 */}
-      {direction === "forward" && (
-        <Flex
-          display="inline-flex"
-          bg="$surface"
-          border="1px solid"
-          borderColor="$border"
-          borderRadius="999px"
-          p="4px"
-          mb="16px"
-          ml="8px"
-          gap="4px"
-        >
-          {(["general", "math"] as const).map((m) => {
-            const active = mode === m;
-            return (
-              <Box
-                key={m}
-                as="button"
-                type="button"
-                role="tab"
-                aria-selected={active}
-                border={0}
-                borderRadius="999px"
-                px="18px"
-                py="6px"
-                fontSize="13px"
-                fontWeight={active ? 600 : 500}
-                bg={active ? "$primary" : "transparent"}
-                color={active ? "$primaryText" : "$textMuted"}
-                onClick={() => handleModeChange(m)}
-              >
-                {m === "general" ? "일반" : "수학"}
-              </Box>
-            );
-          })}
-        </Flex>
-      )}
 
       {/* Input card */}
       <Box
@@ -178,15 +140,15 @@ export function TranslatorPage() {
           borderColor="$border"
         >
           <Text fontSize="14px" fontWeight={600}>
-            {direction === "forward" ? "입력 텍스트" : "점자 입력"}
+            {isReverse ? "점자 입력" : "입력 텍스트"}
           </Text>
           <Text fontSize="12px" color="$textSubtle">
-            {direction === "forward" ? `${text.length}자` : `${cells.length}셀`}
+            {isReverse ? `${cells.length}셀` : `${text.length}자`}
           </Text>
         </Flex>
 
         <Box py="8px">
-          {direction === "reverse" ? (
+          {isReverse ? (
             <BrailleInput cells={cells} onChange={setCells} />
           ) : (
             <Textarea
@@ -194,7 +156,7 @@ export function TranslatorPage() {
               onChange={(e) => setText(e.target.value)}
               rows={4}
               placeholder={
-                mode === "math"
+                pageMode === "math"
                   ? "LaTeX 수식을 $...$로 감싸 입력하세요. 예: $\\frac{3}{4}$"
                   : "점역할 텍스트를 입력하세요..."
               }
@@ -210,11 +172,7 @@ export function TranslatorPage() {
           borderColor="$border"
         >
           <Text fontSize="12px" color="$textSubtle">
-            {direction === "reverse"
-              ? "역점역 모드"
-              : mode === "math"
-                ? "수학 모드 (LaTeX)"
-                : "일반 모드"}
+            {isReverse ? "역점역 모드" : pageMode === "math" ? "수학 모드 (LaTeX)" : "일반 모드"}
           </Text>
           <Box
             as="button"
@@ -232,7 +190,7 @@ export function TranslatorPage() {
             disabled={!canTranslate}
             onClick={handleTranslate}
           >
-            {direction === "forward" ? "점역하기" : "역점역하기"}
+            {isReverse ? "역점역하기" : "점역하기"}
           </Box>
         </Flex>
       </Box>
@@ -248,18 +206,18 @@ export function TranslatorPage() {
       >
         {result.kind === "idle" && (
           <Text color="$textMuted" fontSize="14px">
-            {direction === "forward"
-              ? "텍스트를 입력하고 점역을 시작해보세요"
-              : "점자를 입력하고 역점역을 시작해보세요"}
+            {isReverse
+              ? "점자를 입력하고 역점역을 시작해보세요"
+              : "텍스트를 입력하고 점역을 시작해보세요"}
           </Text>
         )}
         {result.kind === "ok" && (
           <Flex flexDirection="column" alignItems="center" gap="16px" w="100%">
             <Box
-              fontSize={direction === "forward" ? "28px" : "20px"}
+              fontSize={isReverse ? "20px" : "28px"}
               lineHeight={1.6}
               wordBreak="break-all"
-              letterSpacing={direction === "forward" ? "2px" : "0px"}
+              letterSpacing={isReverse ? "0px" : "2px"}
               color="$text"
             >
               {result.output}
