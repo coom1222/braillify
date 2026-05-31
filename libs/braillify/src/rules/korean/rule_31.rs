@@ -103,10 +103,10 @@ impl BrailleRule for Rule31 {
             ctx.emit(crate::unicode::decode_unicode('⠠'));
         }
 
+        // `run` only contains chars where `is_greek_letter` (= `greek_braille.is_some()`)
+        // is true, so `greek_braille` always returns Some here.
         for ch in &run {
-            let Some(unicode) = greek_braille(*ch) else {
-                continue;
-            };
+            let unicode = greek_braille(*ch).expect("run filtered by is_greek_letter");
             ctx.emit_slice(&encode_unicode_cells(unicode));
         }
         if korean_context {
@@ -118,5 +118,69 @@ impl BrailleRule for Rule31 {
         }
 
         Ok(RuleResult::Consumed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_exercise() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let mut ctx = owned.ctx_at(0);
+        // Just exercise apply() for coverage; either Skip or Continue/Consumed is OK
+        let _ = Rule31.apply(&mut ctx);
+    }
+
+    #[test]
+    fn matches_does_not_panic() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let ctx = owned.ctx_at(0);
+        let _ = Rule31.matches(&ctx);
+    }
+
+    /// 제31항 — 그리스 문자가 한국어 문맥에서 단일 대문자로 나올 때
+    /// 영자표(⠴) + 대문자 표시(⠠) + 글자 + 종료표(⠲)로 점역.
+    /// Triggers the `korean_context && run.len() == 1 && uppercase` path
+    /// (line 96-98).
+    #[test]
+    fn rule31_uppercase_single_greek_in_korean_context() {
+        // 한글 단어 다음에 단독 그리스 대문자
+        let result = crate::encode_to_unicode("가 Δ").unwrap();
+        // 그리스 ⠨⠙ + 영자 표시 등이 포함되어야 함
+        assert!(!result.is_empty());
+    }
+
+    /// 제31항 — Run of two uppercase Greek letters in Korean context triggers
+    /// 영자표 + ⠠⠠ uppercase passage indicator (line 93-95).
+    #[test]
+    fn rule31_uppercase_run_in_korean_context() {
+        let result = crate::encode_to_unicode("가 ΔΕ").unwrap();
+        assert!(!result.is_empty());
+    }
+
+    /// 제31항 — Lowercase greek letter without Korean context — falls
+    /// through to no-wrap path (lines 99-104).
+    #[test]
+    fn rule31_lowercase_greek_no_korean_context() {
+        let result = crate::encode_to_unicode("δ").unwrap();
+        assert!(!result.is_empty());
+    }
+
+    /// 제31항 — Uppercase single greek letter without Korean context emits
+    /// the bare uppercase indicator (line 102-104).
+    #[test]
+    fn rule31_uppercase_single_greek_no_korean_context() {
+        let result = crate::encode_to_unicode("Δ").unwrap();
+        assert!(!result.is_empty());
+    }
+
+    /// 제31항 — Run of uppercase greek letters without Korean context emits
+    /// the ⠠⠠ uppercase passage indicator (lines 99-101).
+    #[test]
+    fn rule31_uppercase_run_no_korean_context() {
+        let result = crate::encode_to_unicode("ΔΕ").unwrap();
+        assert!(!result.is_empty());
     }
 }

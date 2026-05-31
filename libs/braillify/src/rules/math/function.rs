@@ -13,9 +13,9 @@ use crate::unicode::decode_unicode;
 /// - sin → 6s → ⠖⠎
 /// - cos → 6c → ⠖⠉
 /// - tan → 6t → ⠖⠞
-/// - csc → 6\ → ⠖⠳
-/// - sec → 6< → ⠖⠣
-/// - cot → 6- → ⠖⠤
+/// - csc → 6< → ⠖⠣
+/// - sec → 6- → ⠖⠤
+/// - cot → 6\\ → ⠖⠳
 /// - sinh → 6sh → ⠖⠎⠓
 /// - cosh → 6ch → ⠖⠉⠓
 /// - tanh → 6th → ⠖⠞⠓
@@ -27,18 +27,24 @@ static FUNCTION_MAP: phf::Map<&'static str, &'static [u8]> = phf_map! {
     "sin" => &[decode_unicode('⠖'), decode_unicode('⠎')],     // 6s
     "cos" => &[decode_unicode('⠖'), decode_unicode('⠉')],     // 6c
     "tan" => &[decode_unicode('⠖'), decode_unicode('⠞')],     // 6t
-    "csc" => &[decode_unicode('⠖'), decode_unicode('⠳')],     // 6\
-    "sec" => &[decode_unicode('⠖'), decode_unicode('⠣')],     // 6<
-    "cot" => &[decode_unicode('⠖'), decode_unicode('⠤')],     // 6-
+    "csc" => &[decode_unicode('⠖'), decode_unicode('⠣')],     // 6<
+    "sec" => &[decode_unicode('⠖'), decode_unicode('⠤')],     // 6-
+    "cot" => &[decode_unicode('⠖'), decode_unicode('⠳')],     // 6\\
     "sinh" => &[decode_unicode('⠖'), decode_unicode('⠎'), decode_unicode('⠓')], // 6sh
     "cosh" => &[decode_unicode('⠖'), decode_unicode('⠉'), decode_unicode('⠓')], // 6ch
     "tanh" => &[decode_unicode('⠖'), decode_unicode('⠞'), decode_unicode('⠓')], // 6th
+    "arcsin" => &[decode_unicode('⠁'), decode_unicode('⠗'), decode_unicode('⠉'), decode_unicode('⠖'), decode_unicode('⠎')], // arc6s
+    "arccos" => &[decode_unicode('⠁'), decode_unicode('⠗'), decode_unicode('⠉'), decode_unicode('⠖'), decode_unicode('⠉')], // arc6c
+    "arctan" => &[decode_unicode('⠁'), decode_unicode('⠗'), decode_unicode('⠉'), decode_unicode('⠖'), decode_unicode('⠞')], // arc6t
+    "cosec" => &[decode_unicode('⠖'), decode_unicode('⠣')], // 6< (alias for csc)
     "log" => &[], // Special-case encoded in math::encoder
     "lim" => &[],
 };
 
 /// Known function names in order of length (longest first for greedy matching).
 const FUNCTION_NAMES: &[&str] = &[
+    "arcsin", "arccos", "arctan", // 6-letter arc functions
+    "cosec",  // 5-letter alias
     "sinh", "cosh", "tanh", // 4-letter
     "lim", "log", // 3-letter (special-case)
     "sin", "cos", "tan", "csc", "sec", "cot", // 3-letter

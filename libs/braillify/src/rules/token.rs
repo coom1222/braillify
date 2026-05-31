@@ -84,6 +84,10 @@ pub enum ModeEvent {
     CapsWord,
     CapsPassageStart,
     CapsPassageEnd,
+    /// Grade-1 indicator (⠰, byte 48). Required before CapsWord/CapsPassage when the
+    /// uppercase ASCII letters spell a multi-letter shortform/contraction (UEB 5.7.2 + 10.9).
+    /// Example: "CD" → ⠰⠠⠠⠉⠙ because ⠉⠙ alone = "could" shortform.
+    Grade1Indicator,
 }
 
 impl<'a> DocumentIR<'a> {
@@ -113,6 +117,9 @@ impl<'a> DocumentIR<'a> {
                 }
                 consumed = j.saturating_sub(i);
                 owned_merged = Some(merged);
+            } else if let Some((merged, merged_count)) = merge_math_span(&raw_words, i) {
+                consumed = merged_count;
+                owned_merged = Some(merged);
             }
 
             let text_cow = match owned_merged {
@@ -139,6 +146,113 @@ impl<'a> DocumentIR<'a> {
             state: EncoderState::new(english_indicator),
         }
     }
+}
+
+fn is_korean_char(c: char) -> bool {
+    let code = c as u32;
+    (0xAC00..=0xD7A3).contains(&code) || (0x3131..=0x3163).contains(&code)
+}
+
+fn is_math_span_char(c: char) -> bool {
+    is_korean_char(c)
+        || c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '=' | '+'
+                | '-'
+                | '\u{2212}'
+                | '×'
+                | '÷'
+                | '/'
+                | '√'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | ','
+                | '.'
+                | '!'
+                | '<'
+                | '>'
+                | ':'
+                | ';'
+                | '\''
+                | '"'
+        )
+}
+
+fn has_math_trigger(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(
+            c,
+            '=' | '×' | '÷' | '/' | '√' | '{' | '}' | '[' | ']' | '(' | ')'
+        )
+    }) || text.contains("...")
+}
+
+fn merge_math_span(raw_words: &[&str], start: usize) -> Option<(String, usize)> {
+    let mut merged = String::new();
+    let mut end = start;
+    let mut paren_balance = 0i32;
+    let mut square_balance = 0i32;
+    let mut curly_balance = 0i32;
+    let mut saw_korean = false;
+    let mut saw_trigger = false;
+    let mut best: Option<(String, usize)> = None;
+
+    while end < raw_words.len() {
+        let word = raw_words[end];
+        // Closure (not bare fn) is intentional: forces tarpaulin to attribute
+        // the call to `is_math_span_char` body instead of fn declaration line.
+        #[allow(clippy::redundant_closure)]
+        let all_span = word.chars().all(|c| is_math_span_char(c));
+        if !all_span {
+            break;
+        }
+
+        if !merged.is_empty() {
+            merged.push(' ');
+        }
+        merged.push_str(word);
+
+        for ch in word.chars() {
+            saw_korean |= is_korean_char(ch);
+            saw_trigger |= matches!(
+                ch,
+                '=' | '×' | '÷' | '/' | '√' | '{' | '}' | '[' | ']' | '(' | ')'
+            );
+            match ch {
+                '(' => paren_balance += 1,
+                ')' => paren_balance -= 1,
+                '[' => square_balance += 1,
+                ']' => square_balance -= 1,
+                '{' => curly_balance += 1,
+                '}' => curly_balance -= 1,
+                _ => {}
+            }
+        }
+
+        let balanced = paren_balance == 0 && square_balance == 0 && curly_balance == 0;
+        let multi_word = end > start;
+        let looks_like_span = saw_trigger || has_math_trigger(&merged);
+        let is_brace_math = merged.contains('=') && merged.contains('{') && merged.contains('}');
+        // BMI 같은 영문자 + 한글 mixed (`BMI(체질량 지수) = ...`)는 일반 한국어 path가
+        // 더 잘 처리. mixed_korean_math 분기는 순수 한글 명사구 + 수식 입력만 대상으로.
+        let is_mixed_korean_math = saw_korean
+            && merged.contains('=')
+            && (merged.contains('×') || merged.contains('√'))
+            && !merged.chars().any(|c| c.is_ascii_alphabetic());
+
+        if multi_word && balanced && looks_like_span && (is_brace_math || is_mixed_korean_math) {
+            best = Some((merged.clone(), end + 1 - start));
+        }
+
+        end += 1;
+    }
+
+    best
 }
 
 #[cfg(test)]

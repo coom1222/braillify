@@ -54,13 +54,6 @@ pub fn is_rule_69_symbol(c: char) -> bool {
     SINGLE_MAPPINGS.iter().any(|(candidate, _)| *candidate == c) || c == 'μ'
 }
 
-fn next_non_ascii_after(word: &[char], start: usize) -> Option<char> {
-    word.iter()
-        .skip(start)
-        .copied()
-        .find(|ch| !ch.is_ascii_alphabetic())
-}
-
 fn is_numeric_or_unit_context(ctx: &RuleContext) -> bool {
     ctx.prev_char()
         .is_some_and(|prev| prev.is_ascii_digit() || matches!(prev, '/' | 'μ'))
@@ -70,6 +63,22 @@ fn is_numeric_or_unit_context(ctx: &RuleContext) -> bool {
                 .chars()
                 .all(|ch| ch.is_ascii_digit() || matches!(ch, ',' | '.'))
         || ctx.prev_char() == Some('/')
+}
+
+/// 단어 자체가 단위 연쇄(cal/㎠/min 등)로 구성된 경우 첫 음절이 한국어 뒤에 와도
+/// 단위로 해석한다. 단위 연쇄의 특징: 단어 내에 `/`가 있거나 제69항 단위 기호(㎠, ㎏ 등)가
+/// 섞여 있다.
+fn word_looks_like_unit_chain(word: &[char]) -> bool {
+    let mut has_separator = false;
+    let mut has_unit_symbol = false;
+    for c in word {
+        if *c == '/' {
+            has_separator = true;
+        } else if is_rule_69_symbol(*c) || *c == 'μ' {
+            has_unit_symbol = true;
+        }
+    }
+    has_separator && (has_unit_symbol || word.iter().any(char::is_ascii_alphabetic))
 }
 
 fn is_symbol_measurement_context(ctx: &RuleContext, symbol: char) -> bool {
@@ -86,18 +95,22 @@ fn is_symbol_measurement_context(ctx: &RuleContext, symbol: char) -> bool {
     }
 }
 
+/// Check whether `tail` starts with the ASCII-only string `s` (char-by-char).
+/// All entries in `ASCII_UNIT_MAPPINGS` are ASCII, so byte length and char count
+/// coincide; we avoid materializing `tail` into a `String` on the hot path.
+fn chars_start_with_ascii(tail: &[char], s: &str) -> bool {
+    if tail.len() < s.len() {
+        return false;
+    }
+    s.bytes().zip(tail.iter()).all(|(b, c)| (b as char) == *c)
+}
+
 pub(crate) fn encode_ascii_unit(word: &[char], index: usize) -> Option<(Vec<u8>, usize)> {
-    let tail = word[index..].iter().collect::<String>();
+    let tail = &word[index..];
     for (unit, unicode) in ASCII_UNIT_MAPPINGS {
-        if !tail.starts_with(unit) {
+        if !chars_start_with_ascii(tail, unit) {
             continue;
         }
-
-        let next = next_non_ascii_after(word, index + unit.len());
-        if next.is_some_and(|ch| ch.is_ascii_alphabetic()) {
-            continue;
-        }
-
         return Some((encode_unicode_cells(unicode), unit.len()));
     }
     None
@@ -150,7 +163,8 @@ impl BrailleRule for Rule69 {
             || matches!(ctx.char_type, CharType::Number(_)
                 if ctx.index == 0 && parse_numeric_ascii_unit_prefix(ctx.word_chars).is_some())
             || matches!(ctx.char_type, CharType::English(_)
-                if is_numeric_or_unit_context(ctx)
+                if (is_numeric_or_unit_context(ctx)
+                    || (ctx.index == 0 && word_looks_like_unit_chain(ctx.word_chars)))
                     && encode_ascii_unit(ctx.word_chars, ctx.index).is_some())
     }
 
@@ -169,18 +183,11 @@ impl BrailleRule for Rule69 {
         }
 
         if matches!(ctx.char_type, CharType::English(_))
-            && is_numeric_or_unit_context(ctx)
+            && (is_numeric_or_unit_context(ctx)
+                || (ctx.index == 0 && word_looks_like_unit_chain(ctx.word_chars)))
             && let Some((encoded, consumed)) = encode_ascii_unit(ctx.word_chars, ctx.index)
         {
             trim_recent_english_indicator(ctx.result);
-            if ctx.prev_char() == Some('/')
-                && ctx.word_chars[ctx.index..]
-                    .iter()
-                    .collect::<String>()
-                    .starts_with("min")
-            {
-                ctx.emit(0);
-            }
             ctx.emit_slice(&encoded);
             ctx.state.is_english = false;
             ctx.state.needs_english_continuation = false;
@@ -242,12 +249,13 @@ impl BrailleRule for Rule69 {
             return Ok(RuleResult::Consumed);
         }
 
-        let Some((_, unicode)) = SINGLE_MAPPINGS
+        // `matches()` guard `is_rule_69_symbol(c)` is a `SINGLE_MAPPINGS` lookup,
+        // so reaching here without the prior μ/ASCII-unit/`%`-shortcut paths
+        // means the char is guaranteed to be in `SINGLE_MAPPINGS`.
+        let (_, unicode) = SINGLE_MAPPINGS
             .iter()
             .find(|(candidate, _)| *candidate == ctx.current_char())
-        else {
-            return Ok(RuleResult::Skip);
-        };
+            .expect("matches() guarantees the char is in SINGLE_MAPPINGS");
         let encoded = encode_unicode_cells(unicode);
         ctx.emit_slice(&encoded);
         if should_insert_separator_after_symbol(ctx.current_char(), ctx.next_char()) {
@@ -267,5 +275,34 @@ mod tests {
         let parsed = parse_numeric_ascii_unit_prefix(&chars).expect("should parse 180cm");
         assert_eq!(parsed.0, "180");
         assert_eq!(parsed.2, chars.len());
+    }
+
+    /// 제69항 — `%ile` 패턴은 `⠴⠏⠞`로 점역 (line 211-220).
+    #[test]
+    fn rule69_percent_ile_pattern() {
+        let result = crate::encode_to_unicode("50%ile");
+        assert!(result.is_ok());
+        let s = result.unwrap();
+        assert!(s.contains('⠞'));
+    }
+
+    /// 제69항 — `%p` 패턴 (line 222-239).
+    #[test]
+    fn rule69_percent_p_pattern() {
+        let result = crate::encode_to_unicode("50%p");
+        assert!(result.is_ok());
+    }
+
+    /// rule_69:255 — `μ` (mu) alone or followed by non-unit chars triggers the
+    /// else branch where `encode_unicode_cells("⠍")` is appended.
+    #[test]
+    fn rule69_mu_alone_without_unit() {
+        // μ followed by Korean (no ASCII unit) → encode_ascii_unit returns None →
+        // else branch at line 255 fires.
+        let result = crate::encode_to_unicode("3μ가");
+        assert!(result.is_ok());
+        // μ at end with no following text.
+        let result = crate::encode_to_unicode("3μ");
+        assert!(result.is_ok());
     }
 }

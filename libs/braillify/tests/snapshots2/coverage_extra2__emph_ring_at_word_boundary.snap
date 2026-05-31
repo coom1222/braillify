@@ -1,0 +1,7 @@
+---
+source: libs/braillify/tests/coverage_extra2.rs
+expression: rendered
+---
+input  = "the *quick* brown"
+unicode = ok: "⠹⠑⠀⠐⠔⠟⠥⠊⠉⠅⠐⠔⠀⠃⠗⠪⠝"
+bytes   = ok: [57, 17, 0, 16, 20, 31, 37, 10, 9, 5, 16, 20, 0, 3, 23, 42, 29]
