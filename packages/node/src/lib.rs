@@ -17,6 +17,9 @@ pub fn translate_to_braille_font(text: &str) -> Result<String, String> {
     braillify::encode_to_braille_font(text)
 }
 
+#[wasm_bindgen(js_name = "decodeFromUnicode")]
+pub fn decode_from_unicode(braille: &str) -> Result<String, String> {
+    braillify::decode(braille)
 #[cfg(test)]
 mod tests {
     //! Native-host tests for the wasm-bindgen shim. `wasm_bindgen` macros
