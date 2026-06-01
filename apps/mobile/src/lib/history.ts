@@ -10,7 +10,6 @@ export type HistoryItem = {
 };
 
 const KEY = "braillify.history.v1";
-const MAX_ITEMS = 10;
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -57,19 +56,19 @@ export function pushHistory(input: {
     favorite: false,
     createdAt: Date.now(),
   };
-  const next = [item, ...read()].slice(0, MAX_ITEMS);
+
+  const next = [item, ...read()];
   write(next);
+
   return item;
 }
 
 export function toggleFavorite(id: string): void {
-  const next = read().map((it) =>
-    it.id === id ? { ...it, favorite: !it.favorite } : it,
-  );
+  const next = read().map(it => (it.id === id ? { ...it, favorite: !it.favorite } : it));
   write(next);
 }
 
 export function removeHistory(id: string): void {
-  const next = read().filter((it) => it.id !== id);
+  const next = read().filter(it => it.id !== id);
   write(next);
 }

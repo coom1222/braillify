@@ -12,7 +12,7 @@ type PageMode = "general" | "math" | "reverse";
 
 const MODE_OPTIONS: { value: PageMode; label: string }[] = [
   { value: "general", label: "일반" },
-  { value: "math",    label: "수학" },
+  { value: "math", label: "수학" },
   { value: "reverse", label: "역점역" },
 ];
 
@@ -23,9 +23,9 @@ type ResultState =
 
 export function TranslatorPage() {
   const [pageMode, setPageMode] = useState<PageMode>("general");
-  const [text, setText]         = useState("");
-  const [cells, setCells]       = useState<number[]>([]);
-  const [result, setResult]     = useState<ResultState>({ kind: "idle" });
+  const [text, setText] = useState("");
+  const [cells, setCells] = useState<number[]>([]);
+  const [result, setResult] = useState<ResultState>({ kind: "idle" });
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   const isReverse = pageMode === "reverse";
@@ -153,7 +153,7 @@ export function TranslatorPage() {
           ) : (
             <Textarea
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={e => setText(e.target.value)}
               rows={4}
               placeholder={
                 pageMode === "math"
@@ -236,11 +236,7 @@ export function TranslatorPage() {
               fontWeight={500}
               onClick={handleCopy}
             >
-              {copyState === "copied"
-                ? "복사됨"
-                : copyState === "error"
-                  ? "복사 실패"
-                  : "복사"}
+              {copyState === "copied" ? "복사됨" : copyState === "error" ? "복사 실패" : "복사"}
             </Box>
           </Flex>
         )}
