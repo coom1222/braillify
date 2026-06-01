@@ -1,8 +1,12 @@
-import { translateToUnicode } from "braillify";
+import { translateToUnicode, decodeFromUnicode } from "braillify";
 import type { TranslateMode } from "./history";
 
 export type TranslateResult =
   | { ok: true; braille: string }
+  | { ok: false; error: string };
+
+export type ReverseTranslateResult =
+  | { ok: true; korean: string }
   | { ok: false; error: string };
 
 export function translate(text: string, mode: TranslateMode): TranslateResult {
@@ -22,6 +26,20 @@ export function translate(text: string, mode: TranslateMode): TranslateResult {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: `점역 실패: ${msg}` };
+  }
+}
+
+export function translateReverse(braille: string): ReverseTranslateResult {
+  const trimmed = braille.trim();
+  if (!trimmed) {
+    return { ok: false, error: "점자를 입력해주세요." };
+  }
+  try {
+    const korean = decodeFromUnicode(trimmed);
+    return { ok: true, korean };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `역점역 실패: ${msg}` };
   }
 }
 
