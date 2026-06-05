@@ -28,8 +28,6 @@ globalCss({
       '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Noto Sans KR", "Segoe UI", Roboto, sans-serif',
     background: '#f2f2f2',
     color: '#1a1a1a',
-    WebkitFontSmoothing: 'antialiased',
-    WebkitTapHighlightColor: 'transparent',
   },
   button: {
     fontFamily: 'inherit',
@@ -45,6 +43,14 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
+      <head>
+        {/* devup globalCss 가 타입으로 노출하지 않는 vendor 속성 (모바일 UX) */}
+        <style>
+          {
+            'body{-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}'
+          }
+        </style>
+      </head>
       <body>{children}</body>
     </html>
   )

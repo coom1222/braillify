@@ -12,6 +12,8 @@ node_modules
 # Next.js
 .next/
 out/
+*.tsbuildinfo
+next-env.d.ts
 
 # devup-ui generated
 df/
