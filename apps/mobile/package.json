@@ -2,35 +2,34 @@
   "name": "mobile",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "scripts": {
-    "check": "tsc && cargo check --manifest-path src-tauri/Cargo.toml",
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "dev": "next dev -p 1420",
+    "build": "next build",
+    "start": "next start",
+    "lint": "oxlint",
+    "check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
     "ios:dev": "tauri ios dev",
     "ios:run": "tauri ios run",
     "ios:build": "tauri ios build",
     "tauri": "tauri"
   },
   "dependencies": {
-    "@devup-ui/components": "^0.1.45",
-    "@devup-ui/react": "^1.0.36",
+    "@devup-ui/components": "^0.1.46",
+    "@devup-ui/react": "^1.0.37",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "braillify": "workspace:*",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "next": "16.2.6",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   },
   "devDependencies": {
-    "@devup-ui/vite-plugin": "^1.0.59",
+    "@devup-ui/next-plugin": "^1.0.77",
     "@tauri-apps/cli": "^2",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "vite-plugin-top-level-await": "^1.6.0",
-    "vite-plugin-wasm": "^3.6.0"
+    "@types/node": "^25",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "typescript": "~5.8.3"
   }
 }

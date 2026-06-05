@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from "react";
 import { Box, Flex, Text } from "@devup-ui/react";
 import { Textarea } from "@devup-ui/components";
@@ -21,7 +23,7 @@ type ResultState =
   | { kind: "ok"; output: string }
   | { kind: "error"; message: string };
 
-export function TranslatorPage() {
+export function TranslatorView() {
   const [pageMode, setPageMode] = useState<PageMode>("general");
   const [text, setText] = useState("");
   const [cells, setCells] = useState<number[]>([]);

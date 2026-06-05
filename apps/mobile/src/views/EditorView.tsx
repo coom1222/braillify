@@ -1,3 +1,5 @@
+"use client";
+
 import { useMemo, useState } from "react";
 import { Box, Flex, Text } from "@devup-ui/react";
 import { Toggle, Input } from "@devup-ui/components";
@@ -11,7 +13,7 @@ import {
 import { EditableBrailleCell } from "../components/EditableBrailleCell";
 import { copyText } from "../lib/clipboard";
 
-export function EditorPage() {
+export function EditorView() {
   const [cells, setCells] = useState<number[]>([0]);
   const [intaglio, setIntaglio] = useState(false);
   const [importInput, setImportInput] = useState("");

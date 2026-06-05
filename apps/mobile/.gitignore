@@ -8,9 +8,15 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
-dist-ssr
+
+# Next.js
+.next/
+out/
+
+# devup-ui generated
 df/
+.df/
+
 *.local
 
 # Editor directories and files

@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useRef, useState } from "react";
 import { Box, Flex, Text } from "@devup-ui/react";
 import { masksToString, toggleDot, type DotNumber } from "../lib/braille";

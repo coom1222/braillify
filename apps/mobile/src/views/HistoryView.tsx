@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { Box, Flex, Text } from "@devup-ui/react";
 import { Input } from "@devup-ui/components";
@@ -12,7 +14,7 @@ import { copyText } from "../lib/clipboard";
 
 type Tab = "recent" | "favorites";
 
-export function HistoryPage() {
+export function HistoryView() {
   const [items, setItems] = useState<HistoryItem[]>(() => listHistory());
   const [tab, setTab] = useState<Tab>("recent");
   const [query, setQuery] = useState("");
