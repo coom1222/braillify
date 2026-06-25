@@ -2,9 +2,10 @@ use std::{borrow::Cow, cell::RefCell};
 
 mod char_shortcut;
 pub(crate) mod char_struct;
-pub mod decoder;
 #[cfg(feature = "cli")]
 pub mod cli;
+pub mod decoder;
+
 mod encoder;
 pub(crate) mod english;
 pub(crate) mod english_logic;

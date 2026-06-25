@@ -1,68 +1,68 @@
-import { Box, Flex, Text } from "@devup-ui/react";
+import { Box, Flex, Text } from '@devup-ui/react'
 
-export type TabKey = "translator" | "editor" | "history";
+export type TabKey = 'translator' | 'editor' | 'history'
 
 const TABS: Array<{ key: TabKey; label: string; icon: string }> = [
-  { key: "translator", label: "점역기", icon: "⠿" },
-  { key: "editor", label: "편집기", icon: "⠶" },
-  { key: "history", label: "히스토리", icon: "⠒" },
-];
+  { key: 'translator', label: '점역기', icon: '⠿' },
+  { key: 'editor', label: '편집기', icon: '⠶' },
+  { key: 'history', label: '히스토리', icon: '⠒' },
+]
 
 type Props = {
-  active: TabKey;
-  onChange: (key: TabKey) => void;
-};
+  active: TabKey
+  onChange: (key: TabKey) => void
+}
 
 export function BottomTabBar({ active, onChange }: Props) {
   return (
     <Box
       as="nav"
-      position="sticky"
+      bg="$tabBar"
       bottom={0}
       display="grid"
       gridTemplateColumns="repeat(3, 1fr)"
-      bg="$tabBar"
-      pt="10px"
       pb="calc(env(safe-area-inset-bottom, 0px) + 8px)"
+      position="sticky"
+      pt="10px"
     >
-      {TABS.map(tab => {
-        const isActive = tab.key === active;
+      {TABS.map((tab) => {
+        const isActive = tab.key === active
         return (
           <Flex
             key={tab.key}
-            as="button"
-            type="button"
-            flexDirection="column"
             alignItems="center"
-            justifyContent="center"
-            gap="4px"
+            as="button"
             bg="transparent"
             border={0}
-            p="6px"
-            color={isActive ? "#FFFFFF" : "#9A9A9A"}
+            color={isActive ? '#FFFFFF' : '#9A9A9A'}
+            flexDirection="column"
+            gap="4px"
+            justifyContent="center"
             onClick={() => onChange(tab.key)}
-            style={{ cursor: "pointer" }}
+            p="6px"
+            style={{ cursor: 'pointer' }}
+            type="button"
           >
             {/* 활성 dot 인디케이터 */}
             <Box
-              position="relative"
-              display="flex"
               alignItems="center"
-              justifyContent="center"
+              display="flex"
               height="28px"
+              justifyContent="center"
+              position="relative"
             >
               {isActive && (
                 <Box
-                  position="absolute"
-                  top="0"
                   left="50%"
+                  position="absolute"
                   style={{
-                    transform: "translateX(-50%) translateX(-1px)",
-                    width: "4px",
-                    height: "4px",
-                    borderRadius: "50%",
-                    backgroundColor: "#16887f",
+                    transform: 'translateX(-50%) translateX(-1px)',
+                    width: '4px',
+                    height: '4px',
+                    borderRadius: '50%',
+                    backgroundColor: '#16887f',
                   }}
+                  top="0"
                 />
               )}
               <Text fontSize="20px" lineHeight="1" mt="6px">
@@ -73,8 +73,8 @@ export function BottomTabBar({ active, onChange }: Props) {
               {tab.label}
             </Text>
           </Flex>
-        );
+        )
       })}
     </Box>
-  );
+  )
 }

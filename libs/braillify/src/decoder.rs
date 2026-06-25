@@ -7,7 +7,7 @@ pub fn decode(braille: &str) -> Result<String, String> {
         .chars()
         .filter_map(|c| {
             let code = c as u32;
-            if code >= 0x2800 && code <= 0x28FF {
+            if (0x2800..=0x28FF).contains(&code) {
                 Some((code - 0x2800) as u8)
             } else if c == ' ' || c == '\n' {
                 Some(0)
@@ -179,21 +179,21 @@ fn try_two_byte_shortcut(bytes: &[u8], i: usize) -> Option<(char, usize)> {
 //   ㄱ=1 ㄴ=4 ㄷ=7 ㄹ=8 ㅁ=16 ㅂ=17 ㅅ=19 ㅆ=20 ㅇ=21 ㅈ=22 ㅊ=23 ㅋ=24 ㅌ=25 ㅍ=26 ㅎ=27
 fn try_abbreviated_shortcut(b: u8) -> Option<(u32, u32)> {
     match b {
-        57 => Some((4,  1)),  // 억: ㅓ + ㄱ
-        62 => Some((4,  4)),  // 언: ㅓ + ㄴ
-        30 => Some((4,  8)),  // 얼: ㅓ + ㄹ
-        33 => Some((6,  4)),  // 연: ㅕ + ㄴ
-        51 => Some((6,  8)),  // 열: ㅕ + ㄹ
-        59 => Some((6,  21)), // 영: ㅕ + ㅇ
-        45 => Some((8,  1)),  // 옥: ㅗ + ㄱ
-        55 => Some((8,  4)),  // 온: ㅗ + ㄴ
-        63 => Some((8,  21)), // 옹: ㅗ + ㅇ
-        27 => Some((13, 4)),  // 운: ㅜ + ㄴ
-        47 => Some((13, 8)),  // 울: ㅜ + ㄹ
-        53 => Some((18, 4)),  // 은: ㅡ + ㄴ
-        46 => Some((18, 8)),  // 을: ㅡ + ㄹ
-        31 => Some((20, 4)),  // 인: ㅣ + ㄴ
-        _  => None,
+        57 => Some((4, 1)),  // 억: ㅓ + ㄱ
+        62 => Some((4, 4)),  // 언: ㅓ + ㄴ
+        30 => Some((4, 8)),  // 얼: ㅓ + ㄹ
+        33 => Some((6, 4)),  // 연: ㅕ + ㄴ
+        51 => Some((6, 8)),  // 열: ㅕ + ㄹ
+        59 => Some((6, 21)), // 영: ㅕ + ㅇ
+        45 => Some((8, 1)),  // 옥: ㅗ + ㄱ
+        55 => Some((8, 4)),  // 온: ㅗ + ㄴ
+        63 => Some((8, 21)), // 옹: ㅗ + ㅇ
+        27 => Some((13, 4)), // 운: ㅜ + ㄴ
+        47 => Some((13, 8)), // 울: ㅜ + ㄹ
+        53 => Some((18, 4)), // 은: ㅡ + ㄴ
+        46 => Some((18, 8)), // 을: ㅡ + ㄹ
+        31 => Some((20, 4)), // 인: ㅣ + ㄴ
+        _ => None,
     }
 }
 
@@ -203,9 +203,9 @@ fn try_abbreviated_shortcut(b: u8) -> Option<(u32, u32)> {
 // are NOT in the choseong map, so we need a separate handler.
 fn try_consonant_a_shortcut(b: u8) -> Option<u32> {
     match b {
-        43 => Some(0),  // 가: ㄱ(0) + ㅏ
-        7  => Some(9),  // 사: ㅅ(9) + ㅏ
-        _  => None,
+        43 => Some(0), // 가: ㄱ(0) + ㅏ
+        7 => Some(9),  // 사: ㅅ(9) + ㅏ
+        _ => None,
     }
 }
 
@@ -215,8 +215,8 @@ fn try_consonant_a_shortcut(b: u8) -> Option<u32> {
 // ㅇ=11 ㅈ=12 ㅉ=13 ㅊ=14 ㅋ=15 ㅌ=16 ㅍ=17 ㅎ=18
 fn try_choseong(b: u8) -> Option<u32> {
     match b {
-        8  => Some(0),  // ㄱ
-        9  => Some(2),  // ㄴ  (also 나 shortcut when not followed by jungseong)
+        8 => Some(0),   // ㄱ
+        9 => Some(2),   // ㄴ  (also 나 shortcut when not followed by jungseong)
         10 => Some(3),  // ㄷ  (also 다 shortcut)
         11 => Some(15), // ㅋ  (also 카 shortcut)
         16 => Some(5),  // ㄹ
@@ -228,7 +228,7 @@ fn try_choseong(b: u8) -> Option<u32> {
         32 => Some(9),  // ㅅ  (also 사-related, but ⠠ 사=7)
         40 => Some(12), // ㅈ  (also 자 shortcut)
         48 => Some(14), // ㅊ
-        _  => None,
+        _ => None,
     }
 }
 
@@ -242,23 +242,23 @@ fn try_choseong(b: u8) -> Option<u32> {
 // Falls back to try_choseong (single byte, ㅅ) if not a double pair.
 fn try_choseong_with_double(bytes: &[u8], i: usize) -> Option<(u32, usize)> {
     let b0 = *bytes.get(i)?;
-    if b0 == 32 {
-        if let Some(&b1) = bytes.get(i + 1) {
-            // 된소리표(32) 뒤에 오는 바이트 패턴:
-            //  ㅏ 모음: 된소리표 + 약자 바이트 (가=43, 사=7, 나/다/바/자는 공유)
-            //  기타 모음: 된소리표 + 초성 바이트 (ㄱ=8, ㅅ=32) + 별도 중성
-            // 예) 까=[32,43]  꺼=[32,8,14]  싸=[32,7]  쏘=[32,32,37]
-            let double_idx = match b1 {
-                8  | 43 => Some(1),  // ㄲ: 8=ㄱ초성(꺼·끼…), 43=가약자(까)
-                10      => Some(4),  // ㄸ: 공유바이트 (따·뚜… 모두)
-                24      => Some(8),  // ㅃ: 공유바이트 (빠·뿌… 모두)
-                7  | 32 => Some(10), // ㅆ: 7=사약자(싸), 32=ㅅ초성(쏘·씩…)
-                40      => Some(13), // ㅉ: 공유바이트 (짜·쭈… 모두)
-                _       => None,
-            };
-            if let Some(idx) = double_idx {
-                return Some((idx, 2));
-            }
+    if b0 == 32
+        && let Some(&b1) = bytes.get(i + 1)
+    {
+        // 된소리표(32) 뒤에 오는 바이트 패턴:
+        //  ㅏ 모음: 된소리표 + 약자 바이트 (가=43, 사=7, 나/다/바/자는 공유)
+        //  기타 모음: 된소리표 + 초성 바이트 (ㄱ=8, ㅅ=32) + 별도 중성
+        // 예) 까=[32,43]  꺼=[32,8,14]  싸=[32,7]  쏘=[32,32,37]
+        let double_idx = match b1 {
+            8 | 43 => Some(1),  // ㄲ: 8=ㄱ초성(꺼·끼…), 43=가약자(까)
+            10 => Some(4),      // ㄸ: 공유바이트 (따·뚜… 모두)
+            24 => Some(8),      // ㅃ: 공유바이트 (빠·뿌… 모두)
+            7 | 32 => Some(10), // ㅆ: 7=사약자(싸), 32=ㅅ초성(쏘·씩…)
+            40 => Some(13),     // ㅉ: 공유바이트 (짜·쭈… 모두)
+            _ => None,
+        };
+        if let Some(idx) = double_idx {
+            return Some((idx, 2));
         }
     }
     try_choseong(b0).map(|idx| (idx, 1))
@@ -275,7 +275,7 @@ fn try_jungseong(bytes: &[u8], i: usize) -> Option<(u32, usize)> {
     // Compound vowels (2 bytes) checked first
     match (b, b2) {
         (13, Some(23)) => return Some((16, 2)), // ㅟ  [⠍⠗]
-        (28, Some(23)) => return Some((3,  2)), // ㅒ  [⠜⠗]
+        (28, Some(23)) => return Some((3, 2)),  // ㅒ  [⠜⠗]
         (39, Some(23)) => return Some((10, 2)), // ㅙ  [⠧⠗]
         (15, Some(23)) => return Some((15, 2)), // ㅞ  [⠏⠗]
         _ => {}
@@ -299,7 +299,7 @@ fn try_jungseong(bytes: &[u8], i: usize) -> Option<(u32, usize)> {
         42 => 18, // ㅡ
         58 => 19, // ㅢ
         21 => 20, // ㅣ
-        _  => return None,
+        _ => return None,
     };
     Some((idx, 1))
 }
@@ -318,38 +318,38 @@ fn try_jongseong(bytes: &[u8], i: usize) -> (u32, usize) {
 
     // Compound jongseong (2 bytes) checked first
     match (b, b2) {
-        (1,  Some(1))  => return (2,  2), // ㄲ
-        (1,  Some(4))  => return (3,  2), // ㄳ
-        (18, Some(5))  => return (5,  2), // ㄵ
-        (18, Some(52)) => return (6,  2), // ㄶ
-        (2,  Some(1))  => return (9,  2), // ㄺ
-        (2,  Some(34)) => return (10, 2), // ㄻ
-        (2,  Some(3))  => return (11, 2), // ㄼ
-        (2,  Some(4))  => return (12, 2), // ㄽ
-        (2,  Some(38)) => return (13, 2), // ㄾ
-        (2,  Some(50)) => return (14, 2), // ㄿ
-        (2,  Some(52)) => return (15, 2), // ㅀ
-        (3,  Some(4))  => return (18, 2), // ㅄ
+        (1, Some(1)) => return (2, 2),   // ㄲ
+        (1, Some(4)) => return (3, 2),   // ㄳ
+        (18, Some(5)) => return (5, 2),  // ㄵ
+        (18, Some(52)) => return (6, 2), // ㄶ
+        (2, Some(1)) => return (9, 2),   // ㄺ
+        (2, Some(34)) => return (10, 2), // ㄻ
+        (2, Some(3)) => return (11, 2),  // ㄼ
+        (2, Some(4)) => return (12, 2),  // ㄽ
+        (2, Some(38)) => return (13, 2), // ㄾ
+        (2, Some(50)) => return (14, 2), // ㄿ
+        (2, Some(52)) => return (15, 2), // ㅀ
+        (3, Some(4)) => return (18, 2),  // ㅄ
         _ => {}
     }
 
     let idx = match b {
-        1  => 1,  // ㄱ
+        1 => 1,   // ㄱ
         18 => 4,  // ㄴ
         20 => 7,  // ㄷ
-        2  => 8,  // ㄹ
+        2 => 8,   // ㄹ
         34 => 16, // ㅁ
-        3  => 17, // ㅂ
-        4  => 19, // ㅅ
+        3 => 17,  // ㅂ
+        4 => 19,  // ㅅ
         12 => 20, // ㅆ
         54 => 21, // ㅇ
-        5  => 22, // ㅈ
-        6  => 23, // ㅊ
+        5 => 22,  // ㅈ
+        6 => 23,  // ㅊ
         22 => 24, // ㅋ
         38 => 25, // ㅌ
         50 => 26, // ㅍ
         52 => 27, // ㅎ
-        _  => return (0, 0),
+        _ => return (0, 0),
     };
     (idx, 1)
 }
@@ -363,8 +363,8 @@ fn build_syllable(cho: u32, jung: u32, jong: u32) -> char {
 
 fn cho_idx_to_jamo(idx: u32) -> char {
     const JAMO: &[char] = &[
-        'ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ',
-        'ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ',
+        'ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ',
+        'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
     ];
     JAMO.get(idx as usize).copied().unwrap_or('?')
 }
@@ -403,8 +403,9 @@ mod tests {
     #[test]
     fn test_abbreviated_syllables() {
         // 을 억 언 얼 … standalone
-        for word in &["을", "억", "언", "얼", "연", "열", "영", "옥", "온", "옹",
-                      "운", "울", "은", "인"] {
+        for word in &[
+            "을", "억", "언", "얼", "연", "열", "영", "옥", "온", "옹", "운", "울", "은", "인",
+        ] {
             assert_eq!(&roundtrip(word), word, "failed on: {word}");
         }
     }
@@ -417,13 +418,6 @@ mod tests {
     #[test]
     fn test_geo_seong() {
         assert_eq!(roundtrip("거성"), "거성");
-    }
-
-    fn to_bytes(s: &str) -> Vec<u8> {
-        s.chars().filter_map(|c| {
-            let code = c as u32;
-            if code >= 0x2800 { Some((code - 0x2800) as u8) } else { None }
-        }).collect()
     }
 
     #[test]
@@ -441,7 +435,7 @@ mod tests {
         assert_eq!(roundtrip("짜다"), "짜다");
         // 실제 단어: 된소리 + 종성 + 후속 음절 조합
         assert_eq!(roundtrip("껐어요"), "껐어요"); // ㄲ+ㅓ+ㅆ 종성 + 어요
-        assert_eq!(roundtrip("아까"), "아까");     // 단어 중간에 된소리
+        assert_eq!(roundtrip("아까"), "아까"); // 단어 중간에 된소리
         assert_eq!(roundtrip("기쁘다"), "기쁘다"); // ㅃ(된소리ㅂ) 포함 단어
     }
 }

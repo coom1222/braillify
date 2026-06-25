@@ -14,7 +14,7 @@ export function AppShell() {
   const [tab, setTab] = useState<TabKey>('translator')
 
   return (
-    <Flex flexDirection="column" minHeight="100dvh" bg="$bg">
+    <Flex bg="$bg" flexDirection="column" minHeight="100dvh">
       <Box
         as="main"
         flex={1}
