@@ -45,10 +45,10 @@ export function TranslatorView() {
     setResult({ kind: 'idle' })
   }
 
-  function handleTranslate() {
+  async function handleTranslate() {
     if (!isReverse) {
       const translateMode = pageMode === 'math' ? 'math' : 'general'
-      const r = translate(text, translateMode)
+      const r = await translate(text, translateMode)
       if (r.ok) {
         setResult({ kind: 'ok', output: r.braille })
         pushHistory({ source: text, braille: r.braille, mode: translateMode })
@@ -56,7 +56,7 @@ export function TranslatorView() {
         setResult({ kind: 'error', message: r.error })
       }
     } else {
-      const r = translateReverse(masksToString(cells))
+      const r = await translateReverse(masksToString(cells))
       if (r.ok) {
         setResult({ kind: 'ok', output: r.korean })
       } else {

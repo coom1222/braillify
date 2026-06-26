@@ -1,5 +1,3 @@
-import { decodeFromUnicode, translateToUnicode } from 'braillify'
-
 import type { TranslateMode } from './history'
 
 export type TranslateResult =
@@ -10,7 +8,10 @@ export type ReverseTranslateResult =
   | { ok: true; korean: string }
   | { ok: false; error: string }
 
-export function translate(text: string, mode: TranslateMode): TranslateResult {
+export async function translate(
+  text: string,
+  mode: TranslateMode,
+): Promise<TranslateResult> {
   const trimmed = text.trim()
   if (!trimmed) {
     return { ok: false, error: '텍스트를 입력해주세요.' }
@@ -22,6 +23,8 @@ export function translate(text: string, mode: TranslateMode): TranslateResult {
   }
 
   try {
+    // WASM 점역 엔진은 첫 점역 시점에 동적 로드한다(hydration 차단 방지).
+    const { translateToUnicode } = await import('braillify')
     const braille = translateToUnicode(text)
     return { ok: true, braille }
   } catch (e) {
@@ -30,12 +33,15 @@ export function translate(text: string, mode: TranslateMode): TranslateResult {
   }
 }
 
-export function translateReverse(braille: string): ReverseTranslateResult {
+export async function translateReverse(
+  braille: string,
+): Promise<ReverseTranslateResult> {
   const trimmed = braille.trim()
   if (!trimmed) {
     return { ok: false, error: '점자를 입력해주세요.' }
   }
   try {
+    const { decodeFromUnicode } = await import('braillify')
     const korean = decodeFromUnicode(trimmed)
     return { ok: true, korean }
   } catch (e) {
