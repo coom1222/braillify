@@ -373,69 +373,231 @@ fn cho_idx_to_jamo(idx: u32) -> char {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    //! 공개 Unicode API, encoder roundtrip, 내부 셀 상태 전이를 서로 분리해 검증한다.
+    //! `decode_cells`에 전달하는 숫자는 점자 Unicode의 U+2800 오프셋과 같은 6점 셀 값이다.
 
+    use super::*;
+    use rstest::rstest;
+
+    /// 지원 범위의 한글을 공개 encoder와 decoder에 연속으로 통과시킨다.
     fn roundtrip(text: &str) -> String {
         let encoded = crate::encode_to_unicode(text).expect("encode failed");
         decode(&encoded).expect("decode failed")
     }
 
-    #[test]
-    fn test_geo_ri() {
-        assert_eq!(decode("⠈⠎⠐⠕").unwrap(), "거리");
+    /// Unicode 입력 정규화를 거치지 않고 decoder 상태 머신에 셀을 직접 전달한다.
+    fn decode_cells(cells: &[u8]) -> String {
+        decode_bytes(cells).expect("decode failed")
     }
 
-    #[test]
-    fn test_gang_a_ji() {
-        assert_eq!(roundtrip("강아지"), "강아지");
+    /// 공개 API가 점자 이외 문자를 무시하고 명시적인 공백 경계는 보존하는지 검증한다.
+    #[rstest]
+    #[case::geo_ri("⠈⠎⠐⠕", "거리")]
+    #[case::space_after_choseong("⠈ ⠉", "ㄱ 나")]
+    #[case::newline_gap_and_non_braille_ignored("A⠈⠎\n⠐⠕B", "거 리")]
+    #[case::unsupported_braille_cell_skipped("⡀⠫", "가")]
+    fn decodes_public_unicode_input(#[case] braille: &str, #[case] expected: &str) {
+        assert_eq!(decode(braille).unwrap(), expected);
     }
 
-    #[test]
-    fn test_han_geul() {
-        assert_eq!(roundtrip("한 글"), "한 글");
+    /// 일반 음절, 공백, 약자가 섞인 대표 단어가 공개 API에서 왕복 가능한지 검증한다.
+    #[rstest]
+    #[case::gang_a_ji("강아지")]
+    #[case::han_geul("한 글")]
+    #[case::na_ga_da("나가다")]
+    #[case::seong_jeong_cheong("성정청")]
+    #[case::geo_seong("거성")]
+    fn roundtrips_supported_words(#[case] word: &str) {
+        assert_eq!(roundtrip(word), word);
     }
 
-    #[test]
-    fn test_na_ga_da() {
-        assert_eq!(roundtrip("나가다"), "나가다");
+    /// 한 셀로 표현되는 한국 점자 약자 음절을 encoder 결과에서 다시 복원한다.
+    #[rstest]
+    #[case::eul("을")]
+    #[case::eok("억")]
+    #[case::eon("언")]
+    #[case::eol("얼")]
+    #[case::yeon("연")]
+    #[case::yeol("열")]
+    #[case::yeong("영")]
+    #[case::ok("옥")]
+    #[case::on("온")]
+    #[case::ong("옹")]
+    #[case::un("운")]
+    #[case::ul("울")]
+    #[case::eun("은")]
+    #[case::in_("인")]
+    fn roundtrips_abbreviated_syllables(#[case] word: &str) {
+        assert_eq!(roundtrip(word), word);
     }
 
-    #[test]
-    fn test_abbreviated_syllables() {
-        // 을 억 언 얼 … standalone
-        for word in &[
-            "을", "억", "언", "얼", "연", "열", "영", "옥", "온", "옹", "운", "울", "은", "인",
-        ] {
-            assert_eq!(&roundtrip(word), word, "failed on: {word}");
-        }
+    /// ㅏ 결합형과 분리형을 포함한 된소리가 단어 안에서도 왕복되는지 검증한다.
+    #[rstest]
+    #[case::compact_gga("까")]
+    #[case::compact_tta("따")]
+    #[case::compact_ppa("빠")]
+    #[case::compact_ssa("싸")]
+    #[case::compact_jja("짜")]
+    #[case::ggeo("꺼")]
+    #[case::ddu("뚜")]
+    #[case::sso("쏘")]
+    #[case::gga_da("까다")]
+    #[case::jja_da("짜다")]
+    #[case::ggeot_eo_yo("껐어요")]
+    #[case::a_gga("아까")]
+    #[case::gi_ppeu_da("기쁘다")]
+    fn roundtrips_tense_consonant_words(#[case] word: &str) {
+        assert_eq!(roundtrip(word), word);
     }
 
-    #[test]
-    fn test_seong_jeong_cheong() {
-        assert_eq!(roundtrip("성정청"), "성정청");
+    /// 초성 셀 하나가 ㅏ를 내포하는 공유 약자형을 음절로 복원한다.
+    #[rstest]
+    #[case::implicit_ga(&[8], "가")]
+    #[case::implicit_na(&[9], "나")]
+    #[case::implicit_da(&[10], "다")]
+    #[case::implicit_ka(&[11], "카")]
+    #[case::implicit_ra(&[16], "라")]
+    #[case::implicit_ma(&[17], "마")]
+    #[case::implicit_ta(&[19], "타")]
+    #[case::implicit_ba(&[24], "바")]
+    #[case::implicit_pa(&[25], "파")]
+    #[case::implicit_ha(&[26], "하")]
+    #[case::implicit_sa(&[32], "사")]
+    #[case::implicit_ja(&[40], "자")]
+    #[case::implicit_cha(&[48], "차")]
+    fn decodes_shared_choseong_a_shortcuts(#[case] cells: &[u8], #[case] expected: &str) {
+        assert_eq!(decode_cells(cells), expected);
     }
 
-    #[test]
-    fn test_geo_seong() {
-        assert_eq!(roundtrip("거성"), "거성");
+    /// ㄱ/ㅅ과 ㅏ가 결합된 전용 셀 및 그 뒤의 종성을 복원한다.
+    #[rstest]
+    #[case::ga(&[43], "가")]
+    #[case::sa(&[7], "사")]
+    #[case::gak(&[43, 1], "각")]
+    #[case::sat(&[7, 4], "삿")]
+    fn decodes_explicit_consonant_a_shortcuts(#[case] cells: &[u8], #[case] expected: &str) {
+        assert_eq!(decode_cells(cells), expected);
     }
 
+    /// 초성 없이 시작하는 모든 단모음·겹모음 셀을 묵음 초성 ㅇ과 조합한다.
+    #[rstest]
+    #[case::a(&[35], "아")]
+    #[case::ae(&[23], "애")]
+    #[case::ya(&[28], "야")]
+    #[case::yae(&[28, 23], "얘")]
+    #[case::eo(&[14], "어")]
+    #[case::e(&[29], "에")]
+    #[case::yeo(&[49], "여")]
+    #[case::ye(&[12], "예")]
+    #[case::o(&[37], "오")]
+    #[case::wa(&[39], "와")]
+    #[case::wae(&[39, 23], "왜")]
+    #[case::oe(&[61], "외")]
+    #[case::yo(&[44], "요")]
+    #[case::u(&[13], "우")]
+    #[case::wo(&[15], "워")]
+    #[case::we(&[15, 23], "웨")]
+    #[case::wi(&[13, 23], "위")]
+    #[case::yu(&[41], "유")]
+    #[case::eu(&[42], "으")]
+    #[case::ui(&[58], "의")]
+    #[case::i(&[21], "이")]
+    fn decodes_standalone_jungseong(#[case] cells: &[u8], #[case] expected: &str) {
+        assert_eq!(decode_cells(cells), expected);
+    }
+
+    /// 초성·중성 상태에서 약자, 다음 음절, 미지원 셀을 만나는 경계 전이를 검증한다.
+    #[rstest]
+    #[case::geul_from_initial_plus_eul(&[8, 46], "글")]
+    #[case::geok_from_initial_plus_eok(&[8, 57], "걱")]
+    #[case::gin_from_initial_plus_in(&[8, 31], "긴")]
+    #[case::na_then_eul(&[9, 35, 46], "나을")]
+    #[case::na_then_ga_shortcut(&[9, 35, 43], "나가")]
+    #[case::na_then_sa_shortcut(&[9, 35, 7], "나사")]
+    #[case::na_then_next_choseong(&[9, 35, 10, 35], "나다")]
+    #[case::consecutive_vowels(&[35, 21], "아이")]
+    #[case::fallback_s_after_non_double_marker(&[32, 35], "사")]
+    #[case::unknown_cell_after_syllable(&[8, 35, 64], "가")]
+    fn decodes_state_transition_edges(#[case] cells: &[u8], #[case] expected: &str) {
+        assert_eq!(decode_cells(cells), expected);
+    }
+
+    /// 두 셀을 함께 읽어야 하는 성/정/청/것 약자와 앞 음절 flush를 검증한다.
+    #[rstest]
+    #[case::seong(&[32, 59], "성")]
+    #[case::jeong(&[40, 59], "정")]
+    #[case::cheong(&[48, 59], "청")]
+    #[case::geot(&[56, 14], "것")]
+    #[case::after_geo_seong(&[8, 14, 32, 59], "거성")]
+    #[case::after_geo_geot(&[8, 14, 56, 14], "거것")]
+    fn decodes_two_byte_shortcuts(#[case] cells: &[u8], #[case] expected: &str) {
+        assert_eq!(decode_cells(cells), expected);
+    }
+
+    /// 기본 음절 `가`의 셀 `[8, 35]` 뒤에 단일 종성 셀을 붙여 각 받침을 검증한다.
+    #[rstest]
+    #[case::gak(&[1], "각")]
+    #[case::gan(&[18], "간")]
+    #[case::gad(&[20], "갇")]
+    #[case::gal(&[2], "갈")]
+    #[case::gam(&[34], "감")]
+    #[case::gab(&[3], "갑")]
+    #[case::gas(&[4], "갓")]
+    #[case::gass(&[12], "갔")]
+    #[case::gang(&[54], "강")]
+    #[case::gaj(&[5], "갖")]
+    #[case::gach(&[6], "갗")]
+    #[case::gak_final(&[22], "갘")]
+    #[case::gat(&[38], "같")]
+    #[case::gap(&[50], "갚")]
+    #[case::gah(&[52], "갛")]
+    fn decodes_single_jongseong(#[case] jongseong: &[u8], #[case] expected: &str) {
+        let mut cells = vec![8, 35];
+        cells.extend_from_slice(jongseong);
+
+        assert_eq!(decode_cells(&cells), expected);
+    }
+
+    /// 동일한 `가` 기본 셀 뒤에 두 종성 셀을 붙여 겹받침 조합을 검증한다.
+    #[rstest]
+    #[case::gakk(&[1, 1], "갂")]
+    #[case::gaks(&[1, 4], "갃")]
+    #[case::ganj(&[18, 5], "갅")]
+    #[case::ganh(&[18, 52], "갆")]
+    #[case::galg(&[2, 1], "갉")]
+    #[case::galm(&[2, 34], "갊")]
+    #[case::galb(&[2, 3], "갋")]
+    #[case::gals(&[2, 4], "갌")]
+    #[case::galt(&[2, 38], "갍")]
+    #[case::galp(&[2, 50], "갎")]
+    #[case::galh(&[2, 52], "갏")]
+    #[case::gabs(&[3, 4], "값")]
+    fn decodes_compound_jongseong(#[case] jongseong: &[u8], #[case] expected: &str) {
+        let mut cells = vec![8, 35];
+        cells.extend_from_slice(jongseong);
+
+        assert_eq!(decode_cells(&cells), expected);
+    }
+
+    /// 된소리표 뒤의 축약 초성 또는 일반 초성·중성 조합을 직접 검증한다.
+    #[rstest]
+    #[case::compact_gga(&[32, 43], "까")]
+    #[case::compact_tta(&[32, 10], "따")]
+    #[case::compact_ppa(&[32, 24], "빠")]
+    #[case::compact_ssa(&[32, 7], "싸")]
+    #[case::compact_jja(&[32, 40], "짜")]
+    #[case::ggeo(&[32, 8, 14], "꺼")]
+    #[case::ddu(&[32, 10, 13], "뚜")]
+    #[case::ppi(&[32, 24, 21], "삐")]
+    #[case::sso(&[32, 32, 37], "쏘")]
+    #[case::jjyu(&[32, 40, 41], "쮸")]
+    fn decodes_tense_choseong_cells(#[case] cells: &[u8], #[case] expected: &str) {
+        assert_eq!(decode_cells(cells), expected);
+    }
+
+    /// 입력이 끝난 경우 종성 탐색이 셀을 소비하지 않고 종료되는 경계를 보장한다.
     #[test]
-    fn test_tense_consonants() {
-        // ㅏ 모음: 된소리표 + 약자/공유 바이트 (compact form)
-        for word in &["까", "따", "빠", "싸", "짜"] {
-            assert_eq!(&roundtrip(word), word, "failed on: {word}");
-        }
-        // ㅏ 외 모음: 된소리표 + 초성 바이트 + 별도 중성
-        assert_eq!(roundtrip("꺼"), "꺼"); // ㄲ+ㅓ → [32,8,14]
-        assert_eq!(roundtrip("뚜"), "뚜"); // ㄸ+ㅜ → [32,10,13]
-        assert_eq!(roundtrip("쏘"), "쏘"); // ㅆ+ㅗ → [32,32,37]
-        // 단어 안에서도 동작
-        assert_eq!(roundtrip("까다"), "까다");
-        assert_eq!(roundtrip("짜다"), "짜다");
-        // 실제 단어: 된소리 + 종성 + 후속 음절 조합
-        assert_eq!(roundtrip("껐어요"), "껐어요"); // ㄲ+ㅓ+ㅆ 종성 + 어요
-        assert_eq!(roundtrip("아까"), "아까"); // 단어 중간에 된소리
-        assert_eq!(roundtrip("기쁘다"), "기쁘다"); // ㅃ(된소리ㅂ) 포함 단어
+    fn empty_jongseong_slice_returns_no_match() {
+        assert_eq!(try_jongseong(&[], 0), (0, 0));
     }
 }

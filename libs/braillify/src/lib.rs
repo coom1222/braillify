@@ -846,6 +846,27 @@ pub fn decode(braille: &str) -> Result<String, String> {
     decoder::decode(braille)
 }
 
+#[cfg(test)]
+mod decode_public_api_tests {
+    //! decoder 내부 단위 테스트와 별개로 crate root 공개 API의 연결 계약을 검증한다.
+
+    use super::{decode, encode_to_unicode};
+
+    /// 공개 encoder의 Unicode 점자 출력을 공개 decoder가 다시 소비할 수 있어야 한다.
+    #[test]
+    fn decode_roundtrips_through_public_unicode_api() {
+        let encoded = encode_to_unicode("강아지").expect("encode must succeed");
+
+        assert_eq!(decode(&encoded).expect("decode must succeed"), "강아지");
+    }
+
+    /// 공개 decoder는 비점자 문자를 건너뛰되 입력에 명시된 단어 경계는 유지한다.
+    #[test]
+    fn decode_ignores_non_braille_and_preserves_explicit_gap() {
+        assert_eq!(decode("A⠈⠎ ⠐⠕B").expect("decode must succeed"), "거 리");
+    }
+}
+
 /// Unicode version of [`encode_with_formatting`].
 pub fn encode_to_unicode_with_formatting(
     text: &str,
