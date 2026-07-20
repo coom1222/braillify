@@ -9,14 +9,7 @@ type Props = {
   onRemove?: () => void
 }
 
-const DOT_LAYOUT: Array<{ dot: DotNumber }> = [
-  { dot: 1 },
-  { dot: 2 },
-  { dot: 3 },
-  { dot: 4 },
-  { dot: 5 },
-  { dot: 6 },
-]
+const DOT_LAYOUT = [1, 2, 3, 4, 5, 6] as const
 
 function dotBit(dot: DotNumber): number {
   return 1 << (dot - 1)
@@ -41,7 +34,7 @@ export function EditableBrailleCell({
           gridTemplateColumns="repeat(2, 22px)"
           gridTemplateRows="repeat(3, 22px)"
         >
-          {DOT_LAYOUT.map(({ dot }) => {
+          {DOT_LAYOUT.map((dot) => {
             const active = (mask & dotBit(dot)) !== 0
             return (
               <Box

@@ -1,7 +1,7 @@
 'use client'
 
 import { Input, Toggle } from '@devup-ui/components'
-import { Box, Flex, Text } from '@devup-ui/react'
+import { Box, Flex, Text, VStack } from '@devup-ui/react'
 import { useMemo, useState } from 'react'
 
 import { EditableBrailleCell } from '../components/EditableBrailleCell'
@@ -13,6 +13,12 @@ import {
   toggleDot,
 } from '../lib/braille'
 import { copyText } from '../lib/clipboard'
+
+const COPY_LABEL = {
+  idle: '복사',
+  copied: '복사됨',
+  error: '복사 실패',
+}
 
 export function EditorView() {
   const [cells, setCells] = useState<number[]>([0])
@@ -76,7 +82,7 @@ export function EditorView() {
   }
 
   return (
-    <Flex flexDirection="column" gap="16px" pb="12px" pt="24px" px="20px">
+    <VStack gap="16px" pb="12px" pt="24px" px="20px">
       <Box>
         <Text as="h1" fontSize="24px" fontWeight={700} m={0} mb="6px">
           점자 편집기
@@ -105,11 +111,7 @@ export function EditorView() {
               />
             </Flex>
             <OutlineButton onClick={handleCopy}>
-              {copyState === 'copied'
-                ? '복사됨'
-                : copyState === 'error'
-                  ? '복사 실패'
-                  : '복사'}
+              {COPY_LABEL[copyState]}
             </OutlineButton>
           </Flex>
         </Flex>
@@ -215,7 +217,7 @@ export function EditorView() {
           왼쪽: 1·2·3 / 오른쪽: 4·5·6
         </Text>
       </Card>
-    </Flex>
+    </VStack>
   )
 }
 

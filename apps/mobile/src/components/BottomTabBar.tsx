@@ -40,7 +40,6 @@ export function BottomTabBar({ active, onChange }: Props) {
             justifyContent="center"
             onClick={() => onChange(tab.key)}
             p="6px"
-            style={{ cursor: 'pointer' }}
             type="button"
           >
             {/* 활성 dot 인디케이터 */}
@@ -53,16 +52,14 @@ export function BottomTabBar({ active, onChange }: Props) {
             >
               {isActive && (
                 <Box
+                  bg="#16887f"
+                  borderRadius="50%"
+                  h="4px"
                   left="50%"
                   position="absolute"
-                  style={{
-                    transform: 'translateX(-50%) translateX(-1px)',
-                    width: '4px',
-                    height: '4px',
-                    borderRadius: '50%',
-                    backgroundColor: '#16887f',
-                  }}
                   top="0"
+                  transform="translateX(-50%) translateX(-1px)"
+                  w="4px"
                 />
               )}
               <Text fontSize="20px" lineHeight="1" mt="6px">

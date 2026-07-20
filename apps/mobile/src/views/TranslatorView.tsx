@@ -13,11 +13,17 @@ import { translate, translateReverse } from '../lib/translate'
 // 3가지 모드를 하나의 타입으로 통합
 type PageMode = 'general' | 'math' | 'reverse'
 
-const MODE_OPTIONS: { value: PageMode; label: string }[] = [
+const MODE_OPTIONS = [
   { value: 'general', label: '일반' },
   { value: 'math', label: '수학' },
   { value: 'reverse', label: '역점역' },
-]
+] as const
+
+const COPY_LABEL = {
+  idle: '복사',
+  copied: '복사됨',
+  error: '복사 실패',
+}
 
 type ResultState =
   | { kind: 'idle' }
@@ -246,11 +252,7 @@ export function TranslatorView() {
               py="8px"
               type="button"
             >
-              {copyState === 'copied'
-                ? '복사됨'
-                : copyState === 'error'
-                  ? '복사 실패'
-                  : '복사'}
+              {COPY_LABEL[copyState]}
             </Box>
           </Flex>
         )}

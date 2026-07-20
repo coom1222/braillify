@@ -15,6 +15,8 @@ import {
 
 type Tab = 'recent' | 'favorites'
 
+const HISTORY_TABS = ['recent', 'favorites'] as const
+
 export function HistoryView() {
   const [items, setItems] = useState<HistoryItem[]>(() => listHistory())
   const [tab, setTab] = useState<Tab>('recent')
@@ -71,7 +73,7 @@ export function HistoryView() {
         gridTemplateColumns="1fr 1fr"
         p="4px"
       >
-        {(['recent', 'favorites'] as const).map((t) => {
+        {HISTORY_TABS.map((t) => {
           const active = tab === t
           return (
             <Box

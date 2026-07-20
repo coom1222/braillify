@@ -38,19 +38,15 @@ globalCss({
   },
 })
 
+// devup 타입이 노출하지 않는 vendor 속성은 raw globalCss 로 정의 (모바일 UX)
+// eslint-disable-next-line no-unused-expressions -- devup globalCss 태그드 템플릿(부수효과)
+globalCss`body{-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}`
+
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
-      <head>
-        {/* devup globalCss 가 타입으로 노출하지 않는 vendor 속성 (모바일 UX) */}
-        <style>
-          {
-            'body{-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}'
-          }
-        </style>
-      </head>
       <body>{children}</body>
     </html>
   )
