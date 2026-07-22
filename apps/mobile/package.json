@@ -8,9 +8,12 @@
     "start": "next start",
     "lint": "oxlint",
     "check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
-    "ios:dev": "tauri ios dev",
+    "ios:init": "tauri ios init && bun run icons",
+    "ios:dev": "tauri ios dev --config src-tauri/tauri.sim.conf.json",
     "ios:run": "tauri ios run",
     "ios:build": "tauri ios build",
+    "android:init": "tauri android init && bun run icons",
+    "icons": "tauri icon app-icon.json",
     "tauri": "tauri"
   },
   "dependencies": {
