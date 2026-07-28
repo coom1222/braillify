@@ -42,7 +42,7 @@ export function DemoArrow() {
         alt=""
         role="presentation"
         src="/images/home/translate-arrow.svg"
-        transform={['rotate(0deg)', null, null, 'rotate(-90deg)']}
+        transform={[null, null, null, 'rotate(-90deg)']}
         w={['16px', null, null, '24px']}
       />
     </Flex>

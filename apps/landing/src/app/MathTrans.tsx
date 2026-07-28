@@ -1,5 +1,5 @@
 'use client'
-import { Flex, VStack } from '@devup-ui/react'
+import { VStack } from '@devup-ui/react'
 import { useEffect, useState } from 'react'
 
 import { DemoArrow, DemoHeading } from './DemoChrome'
@@ -31,12 +31,11 @@ export function MathTrans() {
       <DemoHeading>
         수식도 점자가 됩니다. 수식 키보드로 입력해 수학 점역을 체험해보세요!
       </DemoHeading>
-      <Flex
+      <VStack
         alignItems="center"
         flexDirection={['column', null, null, 'row']}
         gap={['12px', null, null, '30px']}
         h={['auto', null, null, '500px']}
-        w="100%"
       >
         <MathTransInput
           latex={latex}
@@ -50,7 +49,7 @@ export function MathTrans() {
           readOnly
           value={braille}
         />
-      </Flex>
+      </VStack>
     </VStack>
   )
 }

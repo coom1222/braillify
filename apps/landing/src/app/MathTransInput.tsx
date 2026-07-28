@@ -1,6 +1,6 @@
 'use client'
 
-import { Flex, Text } from '@devup-ui/react'
+import { Flex, Text, VStack } from '@devup-ui/react'
 import type { MathfieldElement } from 'mathlive'
 import { useEffect, useRef, useState } from 'react'
 
@@ -107,11 +107,10 @@ export function MathTransInput({
     // Flex(flex=1 h=100% w=100%)와 flex-basis 를 동일하게 맞춰 좌우 박스 너비를
     // 같게 한다. 실제 배경/여백은 안쪽 박스가 담당한다.
     <Flex flex="1" h="100%" w="100%">
-      <Flex
+      <VStack
         bg="$containerBackground"
         borderRadius={['16px', null, null, '30px']}
         cursor="text"
-        flexDirection="column"
         gap="12px"
         h="100%"
         minH="25dvh"
@@ -163,7 +162,7 @@ export function MathTransInput({
         >
           {latex ? `LaTeX: $${latex}$` : 'LaTeX가 자동으로 생성됩니다'}
         </Text>
-      </Flex>
+      </VStack>
     </Flex>
   )
 }

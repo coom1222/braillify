@@ -1,5 +1,5 @@
 'use client'
-import { Flex, VStack } from '@devup-ui/react'
+import { VStack } from '@devup-ui/react'
 import { useEffect, useState } from 'react'
 
 import { DemoArrow, DemoHeading } from './DemoChrome'
@@ -29,7 +29,7 @@ export function Trans() {
   return (
     <VStack flex="1" gap={['16px', null, null, '30px']}>
       <DemoHeading>직접 입력해 실시간 점자 번역을 체험해보세요!</DemoHeading>
-      <Flex
+      <VStack
         alignItems="center"
         flexDirection={['column', null, null, 'row']}
         gap={['12px', null, null, '30px']}
@@ -62,7 +62,7 @@ export function Trans() {
           readOnly
           value={translateToUnicode(input)}
         />
-      </Flex>
+      </VStack>
     </VStack>
   )
 }
