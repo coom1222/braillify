@@ -111,12 +111,12 @@ export function MathTransInput({
         bg="$containerBackground"
         borderRadius={['16px', null, null, '30px']}
         cursor="text"
+        flex="1"
         gap="12px"
         h="100%"
         minH="25dvh"
         onClick={() => fieldRef.current?.focus()}
         p={['16px', null, null, '40px']}
-        w="100%"
       >
         <Flex flex="1" flexDirection="column" gap="8px">
           {ready && (
