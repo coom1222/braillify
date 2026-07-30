@@ -1,6 +1,6 @@
 'use client'
 
-import { Flex, Text, VStack } from '@devup-ui/react'
+import { css, Flex, Text, VStack } from '@devup-ui/react'
 import type { MathfieldElement } from 'mathlive'
 import { useEffect, useRef, useState } from 'react'
 
@@ -132,13 +132,13 @@ export function MathTransInput({
                   ),
                 )
               }
-              style={{
+              className={css({
                 background: 'transparent',
                 border: 'none',
                 display: 'block',
                 fontSize: '28px',
                 width: '100%',
-              }}
+              })}
             />
           )}
           {!latex && (
