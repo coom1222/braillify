@@ -1,6 +1,6 @@
 'use client'
 
-import { Box, Flex, Text } from '@devup-ui/react'
+import { Box, Flex, Grid, Text, VStack } from '@devup-ui/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { type DotNumber, masksToString, toggleDot } from '../lib/braille'
@@ -86,7 +86,7 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
   const unicodeValue = masksToString(cells)
 
   return (
-    <Box display="flex" flexDirection="column" gap="14px">
+    <VStack gap="14px">
       {/* ── 섹션 1: 직접 입력 ─────────────────────────────── */}
       <Box>
         <Text color="$textSubtle" fontSize="12px" fontWeight={600} mb="6px">
@@ -137,8 +137,7 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
 
         {/* 셀 편집 그리드 */}
         {hasContent ? (
-          <Box
-            display="grid"
+          <Grid
             gap="12px"
             gridTemplateColumns="repeat(auto-fill, minmax(80px, 1fr))"
             maxH="220px"
@@ -154,7 +153,7 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
                 onToggleDot={(dot) => handleToggleDot(i, dot)}
               />
             ))}
-          </Box>
+          </Grid>
         ) : (
           <Flex
             alignItems="center"
@@ -250,6 +249,6 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
           )}
         </Flex>
       </Box>
-    </Box>
+    </VStack>
   )
 }
