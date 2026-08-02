@@ -1,6 +1,6 @@
 'use client'
 
-import { Box, VStack } from '@devup-ui/react'
+import { Box } from '@devup-ui/react'
 import { useEffect, useState } from 'react'
 
 import { BottomTabBar, type TabKey } from '@/components/BottomTabBar'
@@ -16,8 +16,8 @@ function readTabFromUrl(): TabKey {
   return TAB_KEYS.find((k) => k === tab) ?? 'translator'
 }
 
-// 탭 상태만 보유하는 최상위 client island.
-// 레이아웃/메타데이터는 RSC(layout.tsx, page.tsx)에 남겨둔다.
+// 탭 상태와 상호작용 영역(본문 + 하단 탭바)만 담은 client island.
+// 바깥 레이아웃 프레임/메타데이터는 RSC(layout.tsx, page.tsx)에 남겨둔다.
 export function AppShell() {
   const [tab, setTab] = useState<TabKey>('translator')
 
@@ -35,7 +35,7 @@ export function AppShell() {
   }
 
   return (
-    <VStack bg="$bg" minHeight="100dvh">
+    <>
       <Box
         as="main"
         flex={1}
@@ -47,6 +47,6 @@ export function AppShell() {
         {tab === 'history' && <HistoryView />}
       </Box>
       <BottomTabBar active={tab} onChange={changeTab} />
-    </VStack>
+    </>
   )
 }
