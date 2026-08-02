@@ -1,0 +1,11 @@
+.next/
+out/
+node_modules/
+next-env.d.ts
+*.tsbuildinfo
+.df/
+.playwright-cli/
+playwright-report/
+test-results/
+src-tauri/target/
+src-tauri/gen/
