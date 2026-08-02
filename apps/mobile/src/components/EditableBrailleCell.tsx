@@ -1,4 +1,4 @@
-import { Box, Flex, Text } from '@devup-ui/react'
+import { Box, Grid, Text, VStack } from '@devup-ui/react'
 
 import { type DotNumber } from '../lib/braille'
 
@@ -22,13 +22,12 @@ export function EditableBrailleCell({
   onRemove,
 }: Props) {
   return (
-    <Flex alignItems="center" flexDirection="column" gap="6px">
+    <VStack alignItems="center" gap="6px">
       <Text color="$textSubtle" fontSize="11px">
         #{index + 1}
       </Text>
       <Box bg="$bg" borderRadius="12px" px="14px" py="12px">
-        <Box
-          display="grid"
+        <Grid
           gap="6px"
           gridAutoFlow="column"
           gridTemplateColumns="repeat(2, 22px)"
@@ -54,7 +53,7 @@ export function EditableBrailleCell({
               />
             )
           })}
-        </Box>
+        </Grid>
       </Box>
       {onRemove && (
         <Box
@@ -72,6 +71,6 @@ export function EditableBrailleCell({
           ×
         </Box>
       )}
-    </Flex>
+    </VStack>
   )
 }

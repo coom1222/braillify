@@ -1,7 +1,7 @@
 'use client'
 
 import { Input, Toggle } from '@devup-ui/components'
-import { Box, Flex, Text, VStack } from '@devup-ui/react'
+import { Box, Flex, Grid, Text, VStack } from '@devup-ui/react'
 import { useMemo, useState } from 'react'
 
 import { EditableBrailleCell } from '../components/EditableBrailleCell'
@@ -190,8 +190,7 @@ export function EditorView() {
             </Box>
           </Flex>
         </Flex>
-        <Box
-          display="grid"
+        <Grid
           gap="16px"
           gridTemplateColumns="repeat(auto-fill, minmax(80px, 1fr))"
           py="4px"
@@ -205,7 +204,7 @@ export function EditorView() {
               onToggleDot={(dot) => handleToggleDot(i, dot)}
             />
           ))}
-        </Box>
+        </Grid>
       </Card>
 
       {/* Dot number hint card */}
@@ -223,18 +222,17 @@ export function EditorView() {
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <Flex
+    <VStack
       bg="$surface"
       border="1px solid"
       borderColor="$border"
       borderRadius="12px"
-      flexDirection="column"
       gap="10px"
       px="16px"
       py="14px"
     >
       {children}
-    </Flex>
+    </VStack>
   )
 }
 
