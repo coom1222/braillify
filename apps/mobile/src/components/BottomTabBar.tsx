@@ -1,4 +1,4 @@
-import { Box, Flex, Text } from '@devup-ui/react'
+import { Box, Flex, Grid, Text, VStack } from '@devup-ui/react'
 
 export type TabKey = 'translator' | 'editor' | 'history'
 
@@ -15,11 +15,10 @@ type Props = {
 
 export function BottomTabBar({ active, onChange }: Props) {
   return (
-    <Box
+    <Grid
       as="nav"
       bg="$tabBar"
       bottom={0}
-      display="grid"
       gridTemplateColumns="repeat(3, 1fr)"
       pb="calc(env(safe-area-inset-bottom, 0px) + 8px)"
       position="sticky"
@@ -28,14 +27,13 @@ export function BottomTabBar({ active, onChange }: Props) {
       {TABS.map((tab) => {
         const isActive = tab.key === active
         return (
-          <Flex
+          <VStack
             key={tab.key}
             alignItems="center"
             as="button"
             bg="transparent"
             border={0}
             color={isActive ? '#FFFFFF' : '#9A9A9A'}
-            flexDirection="column"
             gap="4px"
             justifyContent="center"
             onClick={() => onChange(tab.key)}
@@ -43,9 +41,8 @@ export function BottomTabBar({ active, onChange }: Props) {
             type="button"
           >
             {/* 활성 dot 인디케이터 */}
-            <Box
+            <Flex
               alignItems="center"
-              display="flex"
               height="28px"
               justifyContent="center"
               position="relative"
@@ -65,13 +62,13 @@ export function BottomTabBar({ active, onChange }: Props) {
               <Text fontSize="20px" lineHeight="1" mt="6px">
                 {tab.icon}
               </Text>
-            </Box>
+            </Flex>
             <Text fontSize="12px" fontWeight={isActive ? 600 : 400}>
               {tab.label}
             </Text>
-          </Flex>
+          </VStack>
         )
       })}
-    </Box>
+    </Grid>
   )
 }
