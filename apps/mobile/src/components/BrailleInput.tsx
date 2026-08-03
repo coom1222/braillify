@@ -1,10 +1,11 @@
 'use client'
 
-import { Box, Flex, Grid, Text, VStack } from '@devup-ui/react'
+import { Box, Flex, Text, VStack } from '@devup-ui/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { type DotNumber, masksToString, toggleDot } from '../lib/braille'
-import { EditableBrailleCell } from './EditableBrailleCell'
+import { BrailleKeyboard } from './BrailleKeyboard'
+import { BrailleTextInput } from './BrailleTextInput'
 
 interface BrailleInputProps {
   cells: number[]
@@ -82,45 +83,12 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
     onChange([])
   }
 
-  const hasContent = cells.length > 0
   const unicodeValue = masksToString(cells)
 
   return (
     <VStack gap="14px">
-      {/* ── 섹션 1: 직접 입력 ─────────────────────────────── */}
-      <Box>
-        <Text color="$textSubtle" fontSize="12px" fontWeight={600} mb="6px">
-          직접 입력 / 붙여넣기
-        </Text>
-        <Box
-          // 포커스 시 테두리 강조
-          _focus={{ borderColor: '$primary' }}
-          as="textarea"
-          bg="$background"
-          border="1px solid"
-          borderColor="$border"
-          borderRadius="8px"
-          color="$text"
-          fontFamily="inherit"
-          fontSize="12px"
-          lineHeight={1.6}
-          onChange={handleTextChange}
-          outline="none"
-          placeholder="점자 유니코드를 붙여넣으세요  예: ⠈⠎⠐⠕"
-          px="12px"
-          py="10px"
-          resize="none"
-          rows={2}
-          value={unicodeValue}
-          w="100%"
-        />
-        <Text color="$textSubtle" fontSize="11px" mt="4px">
-          일반 키보드로는 점자 문자를 직접 타이핑하기 어려우므로 주로
-          붙여넣기용입니다.
-        </Text>
-      </Box>
+      <BrailleTextInput onChange={handleTextChange} value={unicodeValue} />
 
-      {/* 구분선 */}
       <Flex alignItems="center" gap="10px">
         <Box bg="$border" flex={1} h="1px" />
         <Text color="$textSubtle" flexShrink={0} fontSize="11px">
@@ -129,126 +97,16 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
         <Box bg="$border" flex={1} h="1px" />
       </Flex>
 
-      {/* ── 섹션 2: 도트 키보드 ───────────────────────────── */}
-      <Box>
-        <Text color="$textSubtle" fontSize="12px" fontWeight={600} mb="8px">
-          도트 키보드
-        </Text>
-
-        {/* 셀 편집 그리드 */}
-        {hasContent ? (
-          <Grid
-            gap="12px"
-            gridTemplateColumns="repeat(auto-fill, minmax(80px, 1fr))"
-            maxH="220px"
-            mb="12px"
-            overflowY="auto"
-          >
-            {cells.map((mask, i) => (
-              <EditableBrailleCell
-                key={cellIds[i] ?? i}
-                index={i}
-                mask={mask}
-                onRemove={hasContent ? () => handleRemoveCell(i) : undefined}
-                onToggleDot={(dot) => handleToggleDot(i, dot)}
-              />
-            ))}
-          </Grid>
-        ) : (
-          <Flex
-            alignItems="center"
-            border="1px dashed"
-            borderColor="$border"
-            borderRadius="8px"
-            color="$textSubtle"
-            fontSize="12px"
-            justifyContent="center"
-            mb="12px"
-            py="16px"
-          >
-            왼쪽: 점 1·2·3 &nbsp;/&nbsp; 오른쪽: 점 4·5·6
-          </Flex>
-        )}
-
-        {/* 액션 버튼 */}
-        <Flex flexWrap="wrap" gap="8px">
-          <Box
-            aria-label="마지막 셀 지우기"
-            as="button"
-            bg="$surface"
-            border="1px solid"
-            borderColor="$border"
-            borderRadius="8px"
-            color="$text"
-            cursor={!hasContent ? 'not-allowed' : 'pointer'}
-            disabled={!hasContent}
-            fontSize="14px"
-            fontWeight={500}
-            onClick={handleBackspace}
-            opacity={!hasContent ? 0.4 : 1}
-            px="14px"
-            py="9px"
-            type="button"
-          >
-            ⌫
-          </Box>
-
-          <Box
-            as="button"
-            bg="$surface"
-            border="1px solid"
-            borderColor="$border"
-            borderRadius="8px"
-            color="$text"
-            cursor="pointer"
-            fontSize="13px"
-            fontWeight={500}
-            onClick={handleAddSpace}
-            px="14px"
-            py="9px"
-            type="button"
-          >
-            공백 ⠀
-          </Box>
-
-          <Box
-            as="button"
-            bg="$primary"
-            border={0}
-            borderRadius="8px"
-            color="$primaryText"
-            cursor="pointer"
-            fontSize="13px"
-            fontWeight={600}
-            onClick={handleAddCell}
-            px="16px"
-            py="9px"
-            type="button"
-          >
-            + 셀
-          </Box>
-
-          {hasContent && (
-            <Box
-              as="button"
-              bg="transparent"
-              border="1px solid"
-              borderColor="$danger"
-              borderRadius="8px"
-              color="$danger"
-              cursor="pointer"
-              fontSize="13px"
-              fontWeight={500}
-              onClick={handleClear}
-              px="14px"
-              py="9px"
-              type="button"
-            >
-              전체 삭제
-            </Box>
-          )}
-        </Flex>
-      </Box>
+      <BrailleKeyboard
+        cellIds={cellIds}
+        cells={cells}
+        onAddCell={handleAddCell}
+        onAddSpace={handleAddSpace}
+        onBackspace={handleBackspace}
+        onClear={handleClear}
+        onRemoveCell={handleRemoveCell}
+        onToggleDot={handleToggleDot}
+      />
     </VStack>
   )
 }
