@@ -107,6 +107,7 @@ export function TranslatorView() {
         gap="4px"
         mb="16px"
         p="4px"
+        role="tablist"
       >
         {MODE_OPTIONS.map(({ value, label }) => {
           const active = pageMode === value

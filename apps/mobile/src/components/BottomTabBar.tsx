@@ -30,6 +30,7 @@ export function BottomTabBar({ active, onChange }: Props) {
           <VStack
             key={tab.key}
             alignItems="center"
+            aria-current={isActive ? 'page' : undefined}
             as="button"
             bg="transparent"
             border={0}

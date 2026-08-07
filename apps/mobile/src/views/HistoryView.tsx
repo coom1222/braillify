@@ -71,6 +71,7 @@ export function HistoryView() {
         borderRadius="12px"
         gridTemplateColumns="1fr 1fr"
         p="4px"
+        role="tablist"
       >
         {HISTORY_TABS.map((t) => {
           const active = tab === t

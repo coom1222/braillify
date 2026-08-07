@@ -16,7 +16,7 @@ export function BrailleTextInput({ value, onChange }: BrailleTextInputProps) {
         // 포커스 시 테두리 강조
         _focus={{ borderColor: '$primary' }}
         as="textarea"
-        bg="$background"
+        bg="$bg"
         border="1px solid"
         borderColor="$border"
         borderRadius="8px"
