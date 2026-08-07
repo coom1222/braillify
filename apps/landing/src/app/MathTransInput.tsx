@@ -59,22 +59,19 @@ export function MathTransInput({
   }, [ready])
 
   return (
-    // 바깥 Flex 는 padding 이 없는 flex 아이템이다. flex-basis:0 이라도 flex 아이템의
-    // border-box 크기는 padding 합보다 작아질 수 없어서, padding 을 가진 아이템은
-    // 그만큼(좌우 40px x2) 기본 크기를 더 갖고 출력측 TransInput 보다 넓어진다.
-    // 실제 배경/여백은 안쪽 VStack 이 담당해 좌우 박스 폭을 같게 유지한다.
-    // minW=0 은 math-field 의 콘텐츠 최소 폭이 아이템을 밀어 넓히는 것을 막는다.
-    <Flex flex="1" h="100%" minW="0">
+    // 폭 분배(flex)는 호출부가 맡는다. 바깥 Flex 에 padding 을 두지 않는 이유는
+    // flex-basis:0 이라도 flex 아이템의 border-box 크기가 padding 합보다 작아질 수
+    // 없어서, padding 이 있으면 그만큼 출력측 TransInput 보다 넓어지기 때문이다.
+    <Flex h="100%" w="100%">
       <VStack
         bg="$containerBackground"
         borderRadius={['16px', null, null, '30px']}
         cursor="text"
-        flex="1"
         gap="12px"
         minH="25dvh"
-        minW="0"
         onClick={() => fieldRef.current?.focus()}
         p={['16px', null, null, '40px']}
+        w="100%"
       >
         <VStack flex="1" gap="8px">
           {ready && (
