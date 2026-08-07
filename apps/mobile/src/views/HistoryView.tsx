@@ -1,7 +1,7 @@
 'use client'
 
 import { Input } from '@devup-ui/components'
-import { Box, Flex, Text } from '@devup-ui/react'
+import { Box, Flex, Grid, Text, VStack } from '@devup-ui/react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { copyText } from '../lib/clipboard'
@@ -53,7 +53,7 @@ export function HistoryView() {
   }
 
   return (
-    <Flex flexDirection="column" gap="14px" pb="12px" pt="24px" px="20px">
+    <VStack gap="14px" pb="12px" pt="24px" px="20px">
       <Box>
         <Text as="h1" fontSize="24px" fontWeight={700} m={0} mb="6px">
           점역 히스토리
@@ -64,12 +64,11 @@ export function HistoryView() {
       </Box>
 
       {/* Tabs */}
-      <Box
+      <Grid
         bg="$surface"
         border="1px solid"
         borderColor="$border"
         borderRadius="12px"
-        display="grid"
         gridTemplateColumns="1fr 1fr"
         p="4px"
       >
@@ -96,7 +95,7 @@ export function HistoryView() {
             </Box>
           )
         })}
-      </Box>
+      </Grid>
 
       {/* Search */}
       <Input
@@ -109,7 +108,7 @@ export function HistoryView() {
       />
 
       {/* List */}
-      <Flex flexDirection="column" gap="10px">
+      <VStack gap="10px">
         {filtered.length === 0 && (
           <Box color="$textSubtle" fontSize="13px" py="40px" textAlign="center">
             {tab === 'favorites'
@@ -136,7 +135,7 @@ export function HistoryView() {
                 gap="12px"
                 justifyContent="space-between"
               >
-                <Flex flex={1} flexDirection="column" gap="4px" minW={0}>
+                <VStack flex={1} gap="4px" minW={0}>
                   <Box
                     fontSize="15px"
                     fontWeight={700}
@@ -157,7 +156,7 @@ export function HistoryView() {
                   >
                     {it.braille}
                   </Box>
-                </Flex>
+                </VStack>
                 <Flex alignItems="center" gap="6px">
                   <Box
                     aria-label={it.favorite ? '즐겨찾기 해제' : '즐겨찾기'}
@@ -222,7 +221,7 @@ export function HistoryView() {
             </Box>
           )
         })}
-      </Flex>
-    </Flex>
+      </VStack>
+    </VStack>
   )
 }

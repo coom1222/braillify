@@ -1,7 +1,7 @@
 'use client'
 
 import { Textarea } from '@devup-ui/components'
-import { Box, Flex, Text } from '@devup-ui/react'
+import { Box, Flex, Text, VStack } from '@devup-ui/react'
 import { useState } from 'react'
 
 import { BrailleInput } from '../components/BrailleInput'
@@ -228,7 +228,7 @@ export function TranslatorView() {
           </Text>
         )}
         {result.kind === 'ok' && (
-          <Flex alignItems="center" flexDirection="column" gap="16px" w="100%">
+          <VStack alignItems="center" gap="16px" w="100%">
             <Box
               color="$text"
               fontSize={isReverse ? '20px' : '28px'}
@@ -254,7 +254,7 @@ export function TranslatorView() {
             >
               {COPY_LABEL[copyState]}
             </Box>
-          </Flex>
+          </VStack>
         )}
         {result.kind === 'error' && (
           <Text
