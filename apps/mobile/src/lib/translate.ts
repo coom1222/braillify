@@ -1,12 +1,10 @@
 import type { TranslateMode } from './history'
 
 export type TranslateResult =
-  | { ok: true; braille: string }
-  | { ok: false; error: string }
+  { ok: true; braille: string } | { ok: false; error: string }
 
 export type ReverseTranslateResult =
-  | { ok: true; korean: string }
-  | { ok: false; error: string }
+  { ok: true; korean: string } | { ok: false; error: string }
 
 export async function translate(
   text: string,
