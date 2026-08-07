@@ -1,6 +1,6 @@
 'use client'
 
-import { css, Text, VStack } from '@devup-ui/react'
+import { css, Flex, Text, VStack } from '@devup-ui/react'
 import type { MathfieldElement } from 'mathlive'
 import { useEffect, useRef, useState } from 'react'
 
@@ -59,64 +59,68 @@ export function MathTransInput({
   }, [ready])
 
   return (
-    <VStack
-      bg="$containerBackground"
-      borderRadius={['16px', null, null, '30px']}
-      cursor="text"
-      // 데스크톱 가로 배치에서 출력 박스와 폭을 반씩 나눈다. minW=0 은 math-field 의
-      // 콘텐츠 최소 폭이 flex 아이템을 밀어 넓히는 것을 막는다.
-      flex="1"
-      gap="12px"
-      h="100%"
-      minH="25dvh"
-      minW="0"
-      onClick={() => fieldRef.current?.focus()}
-      p={['16px', null, null, '40px']}
-    >
-      <VStack flex="1" gap="8px">
-        {ready && (
-          <math-field
-            ref={fieldRef}
-            className={css({
-              background: 'transparent',
-              border: 'none',
-              display: 'block',
-              fontSize: '28px',
-              width: '100%',
-            })}
-            math-virtual-keyboard-policy="manual"
-            onInput={(e) =>
-              onLatexChange(
-                normalizeFracBraces(
-                  (e.target as MathfieldElement).getValue(
-                    'latex-without-placeholders',
-                  ),
-                ),
-              )
-            }
-          />
-        )}
-        {!latex && (
-          <Text
-            color="$text"
-            opacity={0.5}
-            pointerEvents="none"
-            typography="braille"
-            whiteSpace="pre-line"
-          >
-            {placeholder}
-          </Text>
-        )}
-      </VStack>
-      <Text
-        color="$text"
-        fontFamily="monospace"
-        minH="1.5em"
-        opacity={0.7}
-        wordBreak="break-all"
+    // 바깥 Flex 는 padding 이 없는 flex 아이템이다. flex-basis:0 이라도 flex 아이템의
+    // border-box 크기는 padding 합보다 작아질 수 없어서, padding 을 가진 아이템은
+    // 그만큼(좌우 40px x2) 기본 크기를 더 갖고 출력측 TransInput 보다 넓어진다.
+    // 실제 배경/여백은 안쪽 VStack 이 담당해 좌우 박스 폭을 같게 유지한다.
+    // minW=0 은 math-field 의 콘텐츠 최소 폭이 아이템을 밀어 넓히는 것을 막는다.
+    <Flex flex="1" h="100%" minW="0">
+      <VStack
+        bg="$containerBackground"
+        borderRadius={['16px', null, null, '30px']}
+        cursor="text"
+        flex="1"
+        gap="12px"
+        minH="25dvh"
+        minW="0"
+        onClick={() => fieldRef.current?.focus()}
+        p={['16px', null, null, '40px']}
       >
-        {latex ? `LaTeX: $${latex}$` : 'LaTeX가 자동으로 생성됩니다'}
-      </Text>
-    </VStack>
+        <VStack flex="1" gap="8px">
+          {ready && (
+            <math-field
+              ref={fieldRef}
+              className={css({
+                background: 'transparent',
+                border: 'none',
+                display: 'block',
+                fontSize: '28px',
+                width: '100%',
+              })}
+              math-virtual-keyboard-policy="manual"
+              onInput={(e) =>
+                onLatexChange(
+                  normalizeFracBraces(
+                    (e.target as MathfieldElement).getValue(
+                      'latex-without-placeholders',
+                    ),
+                  ),
+                )
+              }
+            />
+          )}
+          {!latex && (
+            <Text
+              color="$text"
+              opacity={0.5}
+              pointerEvents="none"
+              typography="braille"
+              whiteSpace="pre-line"
+            >
+              {placeholder}
+            </Text>
+          )}
+        </VStack>
+        <Text
+          color="$text"
+          fontFamily="monospace"
+          minH="1.5em"
+          opacity={0.7}
+          wordBreak="break-all"
+        >
+          {latex ? `LaTeX: $${latex}$` : 'LaTeX가 자동으로 생성됩니다'}
+        </Text>
+      </VStack>
+    </Flex>
   )
 }
