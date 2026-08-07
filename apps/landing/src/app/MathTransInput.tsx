@@ -62,7 +62,7 @@ export function MathTransInput({
     // 폭 분배(flex)는 호출부가 맡는다. 바깥 Flex 에 padding 을 두지 않는 이유는
     // flex-basis:0 이라도 flex 아이템의 border-box 크기가 padding 합보다 작아질 수
     // 없어서, padding 이 있으면 그만큼 출력측 TransInput 보다 넓어지기 때문이다.
-    <Flex h="100%" w="100%">
+    <Flex>
       <VStack
         bg="$containerBackground"
         borderRadius={['16px', null, null, '30px']}

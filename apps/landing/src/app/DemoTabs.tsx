@@ -47,7 +47,7 @@ export function DemoTabs() {
             as="button"
             bg={mode === key ? '$text' : 'transparent'}
             border="1px solid $text"
-            borderRadius="50%"
+            borderRadius="1000px"
             color={mode === key ? '$background' : '$text'}
             cursor="pointer"
             id={tabId(key)}

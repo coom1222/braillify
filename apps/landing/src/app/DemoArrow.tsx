@@ -3,7 +3,7 @@ import { Flex, Image } from '@devup-ui/react'
 /** 입력 박스와 출력 박스 사이의 방향 화살표. 한글·수학 데모가 공유한다. */
 export function DemoArrow() {
   return (
-    <Flex>
+    <Flex alignSelf="center">
       {/* 데스크톱에서만 보이는 원형 장식. 화살표와 중복 안내되지 않도록 장식으로 둔다. */}
       <Image
         alt=""

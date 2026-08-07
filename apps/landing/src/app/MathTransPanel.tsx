@@ -29,7 +29,6 @@ export function MathTransPanel() {
 
   return (
     <VStack
-      alignItems="center"
       flexDirection={[null, null, null, 'row']}
       gap={['12px', null, null, '30px']}
       h={['auto', null, null, '500px']}

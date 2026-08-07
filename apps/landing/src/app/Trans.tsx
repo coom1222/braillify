@@ -31,7 +31,6 @@ export function Trans() {
     <VStack gap={['16px', null, null, '30px']}>
       <DemoHeading>직접 입력해 실시간 점자 번역을 체험해보세요!</DemoHeading>
       <VStack
-        alignItems="center"
         flexDirection={[null, null, null, 'row']}
         gap={['12px', null, null, '30px']}
         h={[inputFocused ? '50dvh' : 'auto', null, null, '500px']}
