@@ -2,7 +2,8 @@
 import { VStack } from '@devup-ui/react'
 import { useEffect, useState } from 'react'
 
-import { DemoArrow, DemoHeading } from './DemoChrome'
+import { DemoArrow } from './DemoArrow'
+import { DemoHeading } from './DemoHeading'
 import { TransInput } from './TransInput'
 
 export function Trans() {
@@ -27,7 +28,7 @@ export function Trans() {
   const [translationFocused, setTranslationFocused] = useState(false)
 
   return (
-    <VStack flex="1" gap={['16px', null, null, '30px']}>
+    <VStack gap={['16px', null, null, '30px']}>
       <DemoHeading>직접 입력해 실시간 점자 번역을 체험해보세요!</DemoHeading>
       <VStack
         alignItems="center"

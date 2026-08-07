@@ -2,7 +2,8 @@
 import { VStack } from '@devup-ui/react'
 import { useEffect, useState } from 'react'
 
-import { DemoArrow, DemoHeading } from './DemoChrome'
+import { DemoArrow } from './DemoArrow'
+import { DemoHeading } from './DemoHeading'
 import { MathTransInput } from './MathTransInput'
 import { TransInput } from './TransInput'
 
@@ -27,7 +28,7 @@ export function MathTrans() {
   const braille = latex.trim() ? translateToUnicode(`$${latex}$`) : ''
 
   return (
-    <VStack flex="1" gap={['16px', null, null, '30px']}>
+    <VStack gap={['16px', null, null, '30px']}>
       <DemoHeading>
         수식도 점자가 됩니다. 수식 키보드로 입력해 수학 점역을 체험해보세요!
       </DemoHeading>
@@ -44,8 +45,8 @@ export function MathTrans() {
         />
         <DemoArrow />
         <TransInput
-          blurPlaceholder={'예: 사분의 삼 → ⠼⠙⠌⠼⠉'}
-          focusPlaceholder={'예: 사분의 삼 → ⠼⠙⠌⠼⠉'}
+          blurPlaceholder="예: 사분의 삼 → ⠼⠙⠌⠼⠉"
+          focusPlaceholder="예: 사분의 삼 → ⠼⠙⠌⠼⠉"
           readOnly
           value={braille}
         />

@@ -29,7 +29,7 @@ export function DemoTabs() {
   }
 
   return (
-    <VStack flex="1" gap={['16px', null, null, '30px']} w="100%">
+    <VStack gap={['16px', null, null, '30px']} w="100%">
       <Flex
         aria-label="점역 데모 종류"
         gap="10px"
@@ -47,7 +47,7 @@ export function DemoTabs() {
             as="button"
             bg={mode === key ? '$text' : 'transparent'}
             border="1px solid $text"
-            borderRadius="9999px"
+            borderRadius="1000px"
             color={mode === key ? '$background' : '$text'}
             cursor="pointer"
             id={tabId(key)}
@@ -67,7 +67,6 @@ export function DemoTabs() {
       <Box
         aria-labelledby={tabId(mode)}
         display="flex"
-        flex="1"
         flexDirection="column"
         id={PANEL_ID}
         role="tabpanel"
