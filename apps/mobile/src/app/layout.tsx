@@ -28,6 +28,7 @@ globalCss({
       '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Noto Sans KR", "Segoe UI", Roboto, sans-serif',
     background: '#f2f2f2',
     color: '#1a1a1a',
+    WebkitTapHighlightColor: 'transparent',
   },
   button: {
     fontFamily: 'inherit',
@@ -37,10 +38,6 @@ globalCss({
     fontFamily: 'inherit',
   },
 })
-
-// devup 타입이 노출하지 않는 vendor 속성은 raw globalCss 로 정의 (모바일 UX)
-// eslint-disable-next-line no-unused-expressions -- devup globalCss 태그드 템플릿(부수효과)
-globalCss`body{-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}`
 
 export default function RootLayout({
   children,
