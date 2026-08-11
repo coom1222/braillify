@@ -8,12 +8,12 @@ const TABS: Array<{ key: TabKey; label: string; icon: string }> = [
   { key: 'history', label: '히스토리', icon: '⠒' },
 ]
 
-type Props = {
+interface BottomTabBarProps {
   active: TabKey
   onChange: (key: TabKey) => void
 }
 
-export function BottomTabBar({ active, onChange }: Props) {
+export function BottomTabBar({ active, onChange }: BottomTabBarProps) {
   return (
     <Grid
       as="nav"

@@ -1,6 +1,6 @@
 export type TranslateMode = 'general' | 'math'
 
-export type HistoryItem = {
+export interface HistoryItem {
   id: string
   source: string
   braille: string

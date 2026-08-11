@@ -1,4 +1,4 @@
-type Props = {
+interface BrailleCellIconProps {
   dots: ReadonlySet<number> | number[]
   size?: number
   color?: string
@@ -8,7 +8,7 @@ export function BrailleCellIcon({
   dots,
   size = 22,
   color = 'currentColor',
-}: Props) {
+}: BrailleCellIconProps) {
   const set = dots instanceof Set ? dots : new Set(dots)
   const r = size * 0.11
   const cx = [size * 0.3, size * 0.7]
