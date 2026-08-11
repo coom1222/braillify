@@ -1,10 +1,10 @@
-import { Box, VStack } from "@devup-ui/react";
+import { Box, VStack } from '@devup-ui/react'
 
-import { EditorView } from "@/views/EditorView";
-import { HistoryView } from "@/views/HistoryView";
-import { TranslatorView } from "@/views/TranslatorView";
+import { EditorView } from '@/views/EditorView'
+import { HistoryView } from '@/views/HistoryView'
+import { TranslatorView } from '@/views/TranslatorView'
 
-import { TabBar, TabPanel, TabProvider } from "./TabProvider";
+import { TabBar, TabPanel, TabProvider } from './TabProvider'
 
 // Page는 앱 프레임을 구성하는 Server Component
 // 각 View는 개별 Client Component로 유지
@@ -31,5 +31,5 @@ export default function Page() {
         <TabBar />
       </TabProvider>
     </VStack>
-  );
+  )
 }
