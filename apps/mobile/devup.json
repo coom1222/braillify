@@ -17,6 +17,18 @@
         "star": "#F5C518",
         "tabBar": "#2A2A2A"
       }
+    },
+    "typography": {
+      "title": { "fontWeight": 700, "fontSize": "24px" },
+      "body": { "fontWeight": 400, "fontSize": "14px" },
+      "bodyBold": { "fontWeight": 600, "fontSize": "14px" },
+      "bodySm": { "fontWeight": 400, "fontSize": "13px" },
+      "label": { "fontWeight": 600, "fontSize": "12px" },
+      "caption": { "fontWeight": 400, "fontSize": "12px" },
+      "captionSm": { "fontWeight": 400, "fontSize": "11px" },
+      "button": { "fontWeight": 600, "fontSize": "13px" },
+      "buttonLight": { "fontWeight": 500, "fontSize": "13px" },
+      "buttonLg": { "fontWeight": 600, "fontSize": "14px" }
     }
   }
 }

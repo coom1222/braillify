@@ -3,7 +3,7 @@ import { Box, Flex, Grid, Text } from '@devup-ui/react'
 import { type DotNumber } from '../lib/braille'
 import { EditableBrailleCell } from './EditableBrailleCell'
 
-type BrailleKeyboardProps = {
+interface BrailleKeyboardProps {
   cells: number[]
   cellIds: number[]
   onToggleDot: (cellIndex: number, dot: DotNumber) => void
@@ -28,7 +28,7 @@ export function BrailleKeyboard({
 
   return (
     <Box>
-      <Text color="$textSubtle" fontSize="12px" fontWeight={600} mb="8px">
+      <Text color="$textSubtle" mb="8px" typography="label">
         도트 키보드
       </Text>
 
@@ -57,10 +57,10 @@ export function BrailleKeyboard({
           borderColor="$border"
           borderRadius="8px"
           color="$textSubtle"
-          fontSize="12px"
           justifyContent="center"
           mb="12px"
           py="16px"
+          typography="caption"
         >
           왼쪽: 점 1·2·3 &nbsp;/&nbsp; 오른쪽: 점 4·5·6
         </Flex>
@@ -96,12 +96,11 @@ export function BrailleKeyboard({
           borderRadius="8px"
           color="$text"
           cursor="pointer"
-          fontSize="13px"
-          fontWeight={500}
           onClick={onAddSpace}
           px="14px"
           py="9px"
           type="button"
+          typography="buttonLight"
         >
           공백 ⠀
         </Box>
@@ -113,12 +112,11 @@ export function BrailleKeyboard({
           borderRadius="8px"
           color="$primaryText"
           cursor="pointer"
-          fontSize="13px"
-          fontWeight={600}
           onClick={onAddCell}
           px="16px"
           py="9px"
           type="button"
+          typography="button"
         >
           + 셀
         </Box>
@@ -132,12 +130,11 @@ export function BrailleKeyboard({
             borderRadius="8px"
             color="$danger"
             cursor="pointer"
-            fontSize="13px"
-            fontWeight={500}
             onClick={onClear}
             px="14px"
             py="9px"
             type="button"
+            typography="buttonLight"
           >
             전체 삭제
           </Box>

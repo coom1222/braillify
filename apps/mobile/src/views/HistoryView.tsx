@@ -55,10 +55,10 @@ export function HistoryView() {
   return (
     <VStack gap="14px" pb="12px" pt="24px" px="20px">
       <Box>
-        <Text as="h1" fontSize="24px" fontWeight={700} m={0} mb="6px">
+        <Text as="h1" m={0} mb="6px" typography="title">
           점역 히스토리
         </Text>
-        <Text as="p" color="$textMuted" fontSize="14px" m={0}>
+        <Text as="p" color="$textMuted" m={0} typography="body">
           최근 점역 작업 내역과 즐겨찾기를 관리합니다.
         </Text>
       </Box>
@@ -84,13 +84,12 @@ export function HistoryView() {
               border={0}
               borderRadius="8px"
               color={active ? '$primaryText' : '$textMuted'}
-              fontSize="13px"
-              fontWeight={600}
               onClick={() => setTab(t)}
               py="10px"
               role="tab"
               tabIndex={0}
               type="button"
+              typography="button"
             >
               {t === 'recent' ? '🕐 최근 작업' : '⭐ 즐겨찾기'}
             </Box>
@@ -111,7 +110,12 @@ export function HistoryView() {
       {/* List */}
       <VStack gap="10px">
         {filtered.length === 0 && (
-          <Box color="$textSubtle" fontSize="13px" py="40px" textAlign="center">
+          <Box
+            color="$textSubtle"
+            py="40px"
+            textAlign="center"
+            typography="bodySm"
+          >
             {tab === 'favorites'
               ? '즐겨찾기한 항목이 없어요.'
               : query
@@ -148,10 +152,10 @@ export function HistoryView() {
                   </Box>
                   <Box
                     color="$textMuted"
-                    fontSize="14px"
                     letterSpacing="2px"
                     overflow={isExpanded ? 'visible' : 'hidden'}
                     textOverflow={isExpanded ? 'clip' : 'ellipsis'}
+                    typography="body"
                     whiteSpace={isExpanded ? 'normal' : 'nowrap'}
                     wordBreak="break-all"
                   >

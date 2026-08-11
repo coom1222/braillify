@@ -84,10 +84,10 @@ export function EditorView() {
   return (
     <VStack gap="16px" pb="12px" pt="24px" px="20px">
       <Box>
-        <Text as="h1" fontSize="24px" fontWeight={700} m={0} mb="6px">
+        <Text as="h1" m={0} mb="6px" typography="title">
           점자 편집기
         </Text>
-        <Text as="p" color="$textMuted" fontSize="14px" m={0}>
+        <Text as="p" color="$textMuted" m={0} typography="body">
           점 단위로 직접 점자를 조합하고 음각으로 양각 인쇄 레이아웃을
           확인하세요.
         </Text>
@@ -96,12 +96,10 @@ export function EditorView() {
       {/* Preview card */}
       <Card>
         <Flex alignItems="center" justifyContent="space-between">
-          <Text fontSize="14px" fontWeight={600}>
-            미리보기
-          </Text>
+          <Text typography="bodyBold">미리보기</Text>
           <Flex alignItems="center" gap="12px">
             <Flex alignItems="center" gap="8px">
-              <Text as="label" color="$textMuted" fontSize="13px">
+              <Text as="label" color="$textMuted" typography="bodySm">
                 음각
               </Text>
               <Toggle
@@ -129,9 +127,7 @@ export function EditorView() {
 
       {/* Import card */}
       <Card>
-        <Text fontSize="14px" fontWeight={600}>
-          점자 가져오기
-        </Text>
+        <Text typography="bodyBold">점자 가져오기</Text>
         <Input
           allowClear
           error={!!importError}
@@ -153,11 +149,10 @@ export function EditorView() {
           border={0}
           borderRadius="8px"
           color="$primaryText"
-          fontSize="14px"
-          fontWeight={600}
           onClick={handleImport}
           py="12px"
           type="button"
+          typography="buttonLg"
           w="100%"
         >
           가져오기
@@ -167,9 +162,7 @@ export function EditorView() {
       {/* Cell editor card */}
       <Card>
         <Flex alignItems="center" justifyContent="space-between">
-          <Text fontSize="14px" fontWeight={600}>
-            점자 셀 편집 ({cells.length}셀)
-          </Text>
+          <Text typography="bodyBold">점자 셀 편집 ({cells.length}셀)</Text>
           <Flex gap="8px">
             <OutlineButton onClick={handleAddCell}>+ 셀</OutlineButton>
             <Box
@@ -179,12 +172,11 @@ export function EditorView() {
               borderColor="$danger"
               borderRadius="8px"
               color="$danger"
-              fontSize="13px"
-              fontWeight={600}
               onClick={handleReset}
               px="14px"
               py="7px"
               type="button"
+              typography="button"
             >
               초기화
             </Box>
@@ -209,10 +201,8 @@ export function EditorView() {
 
       {/* Dot number hint card */}
       <Card>
-        <Text fontSize="14px" fontWeight={600}>
-          점 번호
-        </Text>
-        <Text color="$textMuted" fontSize="13px">
+        <Text typography="bodyBold">점 번호</Text>
+        <Text color="$textMuted" typography="bodySm">
           왼쪽: 1·2·3 / 오른쪽: 4·5·6
         </Text>
       </Card>
@@ -251,12 +241,11 @@ function OutlineButton({
       borderColor="$border"
       borderRadius="8px"
       color="$text"
-      fontSize="13px"
-      fontWeight={500}
       onClick={onClick}
       px="14px"
       py="7px"
       type="button"
+      typography="buttonLight"
     >
       {children}
     </Box>

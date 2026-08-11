@@ -2,7 +2,7 @@ import { Box, Grid, Text, VStack } from '@devup-ui/react'
 
 import { type DotNumber } from '../lib/braille'
 
-type Props = {
+interface EditableBrailleCellProps {
   mask: number
   index: number
   onToggleDot: (dot: DotNumber) => void
@@ -20,10 +20,10 @@ export function EditableBrailleCell({
   index,
   onToggleDot,
   onRemove,
-}: Props) {
+}: EditableBrailleCellProps) {
   return (
     <VStack alignItems="center" gap="6px">
-      <Text color="$textSubtle" fontSize="11px">
+      <Text color="$textSubtle" typography="captionSm">
         #{index + 1}
       </Text>
       <Box bg="$bg" borderRadius="12px" px="14px" py="12px">

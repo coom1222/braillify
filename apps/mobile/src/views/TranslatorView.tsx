@@ -86,10 +86,10 @@ export function TranslatorView() {
 
   return (
     <Box px="20px" py="24px">
-      <Text as="h1" fontSize="24px" fontWeight={700} m={0} mb="6px">
+      <Text as="h1" m={0} mb="6px" typography="title">
         점역기
       </Text>
-      <Text as="p" color="$textMuted" fontSize="14px" m={0} mb="16px">
+      <Text as="p" color="$textMuted" m={0} mb="16px" typography="body">
         {isReverse
           ? '점을 눌러 점자를 조합하고 역점역합니다.'
           : pageMode === 'math'
@@ -152,10 +152,10 @@ export function TranslatorView() {
           justifyContent="space-between"
           pb="8px"
         >
-          <Text fontSize="14px" fontWeight={600}>
+          <Text typography="bodyBold">
             {isReverse ? '점자 입력' : '입력 텍스트'}
           </Text>
-          <Text color="$textSubtle" fontSize="12px">
+          <Text color="$textSubtle" typography="caption">
             {isReverse ? `${cells.length}셀` : `${text.length}자`}
           </Text>
         </Flex>
@@ -184,7 +184,7 @@ export function TranslatorView() {
           justifyContent="space-between"
           pt="8px"
         >
-          <Text color="$textSubtle" fontSize="12px">
+          <Text color="$textSubtle" typography="caption">
             {isReverse
               ? '역점역 모드'
               : pageMode === 'math'
@@ -199,13 +199,12 @@ export function TranslatorView() {
             color="$primaryText"
             cursor={canTranslate ? 'pointer' : 'not-allowed'}
             disabled={!canTranslate}
-            fontSize="13px"
-            fontWeight={600}
             onClick={handleTranslate}
             opacity={canTranslate ? 1 : 0.4}
             px="18px"
             py="10px"
             type="button"
+            typography="button"
           >
             {isReverse ? '역점역하기' : '점역하기'}
           </Box>
@@ -222,7 +221,7 @@ export function TranslatorView() {
         textAlign="center"
       >
         {result.kind === 'idle' && (
-          <Text color="$textMuted" fontSize="14px">
+          <Text color="$textMuted" typography="body">
             {isReverse
               ? '점자를 입력하고 역점역을 시작해보세요'
               : '텍스트를 입력하고 점역을 시작해보세요'}
@@ -246,12 +245,11 @@ export function TranslatorView() {
               borderColor="$border"
               borderRadius="8px"
               color="$text"
-              fontSize="13px"
-              fontWeight={500}
               onClick={handleCopy}
               px="18px"
               py="8px"
               type="button"
+              typography="buttonLight"
             >
               {COPY_LABEL[copyState]}
             </Box>
@@ -265,10 +263,10 @@ export function TranslatorView() {
             borderColor="$dangerSoftBorder"
             borderRadius="8px"
             color="$danger"
-            fontSize="14px"
             m={0}
             px="16px"
             py="12px"
+            typography="body"
             w="100%"
           >
             {result.message}

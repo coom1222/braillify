@@ -91,7 +91,7 @@ export function BrailleInput({ cells, onChange }: BrailleInputProps) {
 
       <Flex alignItems="center" gap="10px">
         <Box bg="$border" flex={1} h="1px" />
-        <Text color="$textSubtle" flexShrink={0} fontSize="11px">
+        <Text color="$textSubtle" flexShrink={0} typography="captionSm">
           또는 도트 키보드로 조합
         </Text>
         <Box bg="$border" flex={1} h="1px" />
