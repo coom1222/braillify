@@ -1,8 +1,13 @@
-import { Flex, Text, VStack } from '@devup-ui/react'
+import { Button, Flex, Text, VStack } from '@devup-ui/react'
 
-import { SIDEBAR_ITEMS } from '@/constants/navigation'
+import { type AppView, SIDEBAR_ITEMS } from '@/constants/navigation'
 
-export function AppSidebar() {
+type AppSidebarProps = {
+  activeView: AppView
+  onNavigate: (view: AppView) => void
+}
+
+export function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
   return (
     <VStack
       as="aside"
@@ -41,20 +46,26 @@ export function AppSidebar() {
 
       <VStack aria-label="주요 화면" as="nav" gap="8px" p="18px">
         {SIDEBAR_ITEMS.map((item) => {
-          const isActive = item.status === 'active'
+          const isActive = item.id === activeView
 
           return (
-            <Flex
+            <Button
               key={item.label}
               alignItems="center"
               aria-current={isActive ? 'page' : undefined}
-              aria-disabled={!isActive || undefined}
               bg={isActive ? '$sidebarSelected' : 'transparent'}
+              border="none"
               borderRadius="14px"
               color={isActive ? '$sidebarText' : '$sidebarDisabled'}
+              cursor="pointer"
+              display="flex"
               gap="15px"
+              justifyContent="flex-start"
               minH="78px"
+              onClick={() => onNavigate(item.id)}
               px="18px"
+              textAlign="left"
+              w="100%"
             >
               <Text
                 aria-hidden="true"
@@ -77,7 +88,7 @@ export function AppSidebar() {
                   {item.description}
                 </Text>
               </VStack>
-            </Flex>
+            </Button>
           )
         })}
       </VStack>

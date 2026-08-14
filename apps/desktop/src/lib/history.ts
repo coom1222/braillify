@@ -5,6 +5,7 @@ export const MAX_HISTORY_ENTRIES = 20
 
 export type HistoryEntry = {
   createdAt: string
+  favorite: boolean
   id: string
   input: string
   mode: TranslateMode
@@ -23,7 +24,9 @@ function getStorage(storage?: HistoryStorage): HistoryStorage | null {
   return typeof window === 'undefined' ? null : window.localStorage
 }
 
-function isHistoryEntry(value: unknown): value is HistoryEntry {
+function isHistoryEntry(
+  value: unknown,
+): value is Omit<HistoryEntry, 'favorite'> & { favorite?: boolean } {
   if (!value || typeof value !== 'object') {
     return false
   }
@@ -36,7 +39,10 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
     !Number.isNaN(Date.parse(entry.createdAt)) &&
     typeof entry.input === 'string' &&
     typeof entry.result === 'string' &&
-    (entry.mode === 'general' || entry.mode === 'math')
+    (entry.favorite === undefined || typeof entry.favorite === 'boolean') &&
+    (entry.mode === 'general' ||
+      entry.mode === 'math' ||
+      entry.mode === 'reverse')
   )
 }
 
@@ -58,7 +64,10 @@ export function loadHistory(storage?: HistoryStorage): HistoryEntry[] {
       return []
     }
 
-    return parsedHistory.filter(isHistoryEntry).slice(0, MAX_HISTORY_ENTRIES)
+    return parsedHistory
+      .filter(isHistoryEntry)
+      .map((entry) => ({ ...entry, favorite: entry.favorite ?? false }))
+      .slice(0, MAX_HISTORY_ENTRIES)
   } catch {
     try {
       targetStorage.removeItem(HISTORY_STORAGE_KEY)
@@ -89,6 +98,7 @@ export function addHistoryEntry(
   const nextEntry: HistoryEntry = {
     ...draft,
     createdAt: now().toISOString(),
+    favorite: false,
     id: createId(),
   }
   const nextEntries = [nextEntry, ...loadHistory(storage)].slice(
@@ -105,6 +115,18 @@ export function deleteHistoryEntry(
   storage?: HistoryStorage,
 ): HistoryEntry[] {
   const nextEntries = loadHistory(storage).filter((entry) => entry.id !== id)
+
+  persistHistory(nextEntries, storage)
+  return nextEntries
+}
+
+export function toggleFavoriteHistoryEntry(
+  id: string,
+  storage?: HistoryStorage,
+): HistoryEntry[] {
+  const nextEntries = loadHistory(storage).map((entry) =>
+    entry.id === id ? { ...entry, favorite: !entry.favorite } : entry,
+  )
 
   persistHistory(nextEntries, storage)
   return nextEntries

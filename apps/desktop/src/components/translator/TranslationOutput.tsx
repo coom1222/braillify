@@ -10,12 +10,14 @@ const COPY_STATUS = {
 
 type TranslationOutputProps = {
   copyState: CopyState
+  isReverse: boolean
   onCopy: () => void
   result: string
 }
 
 export function TranslationOutput({
   copyState,
+  isReverse,
   onCopy,
   result,
 }: TranslationOutputProps) {
@@ -23,13 +25,13 @@ export function TranslationOutput({
     return (
       <VStack
         alignItems="center"
-        aria-label="점역 결과"
+        aria-label={isReverse ? '역점역 결과' : '점역 결과'}
         aria-live="polite"
         as="output"
         gap="20px"
         justifyContent="center"
-        minH="430px"
-        py="44px"
+        minH="260px"
+        py="28px"
         w="100%"
       >
         <Text
@@ -43,7 +45,9 @@ export function TranslationOutput({
           ⠃⠗⠁⠊⠇⠇⠊⠋⠽
         </Text>
         <Text color="$caption" typography="body">
-          텍스트를 입력하고 점역을 시작해보세요
+          {isReverse
+            ? '점자를 입력하고 역점역을 시작해보세요'
+            : '텍스트를 입력하고 점역을 시작해보세요'}
         </Text>
       </VStack>
     )
@@ -52,23 +56,29 @@ export function TranslationOutput({
   return (
     <VStack
       alignItems="center"
-      aria-label="점역 결과"
+      aria-label={isReverse ? '역점역 결과' : '점역 결과'}
       aria-live="polite"
       as="section"
       gap="24px"
       justifyContent="center"
-      minH="430px"
-      py="44px"
+      minH="260px"
+      py="28px"
       w="100%"
     >
       <Text
-        aria-label="점역 결과 텍스트"
+        aria-label={isReverse ? '역점역 결과 텍스트' : '점역 결과 텍스트'}
         as="output"
         color="$text"
+        fontFamily={
+          isReverse
+            ? 'var(--font-spoqa-han-sans-neo), sans-serif'
+            : 'Segoe UI Symbol, sans-serif'
+        }
+        fontSize={isReverse ? '22px' : undefined}
+        lineHeight={isReverse ? '1.7' : undefined}
         maxW="920px"
-        tabIndex={0}
         textAlign="center"
-        typography="braille"
+        typography={isReverse ? 'body' : 'braille'}
         userSelect="text"
         whiteSpace="pre-wrap"
         wordBreak="break-word"

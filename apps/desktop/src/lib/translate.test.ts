@@ -2,9 +2,12 @@ import { describe, expect, mock, test } from 'bun:test'
 
 import {
   EMPTY_INPUT_MESSAGE,
+  EMPTY_REVERSE_INPUT_MESSAGE,
+  INVALID_BRAILLE_MESSAGE,
   MATH_BRACE_MESSAGE,
   MATH_DELIMITER_MESSAGE,
   translateGeneralText,
+  translateReverseText,
   translateText,
   TRANSLATION_ERROR_MESSAGE,
 } from './translate'
@@ -50,10 +53,14 @@ describe('translateGeneralText', () => {
     )
   })
 
-  test('기본 Tauri 어댑터 오류도 사용자용 메시지로 변환한다', async () => {
-    await expect(translateGeneralText('안녕')).rejects.toThrow(
-      TRANSLATION_ERROR_MESSAGE,
-    )
+  test('브라우저에서는 WASM 어댑터로 정상 점역한다', async () => {
+    const translateToUnicode = mock(() => '⠣⠒⠉⠻')
+
+    mock.module('braillify-web', () => ({ translateToUnicode }))
+
+    await expect(translateGeneralText('안녕')).resolves.toBe('⠣⠒⠉⠻')
+
+    expect(translateToUnicode).toHaveBeenCalledWith('안녕')
   })
 })
 
@@ -108,5 +115,37 @@ describe('translateText math mode', () => {
     expect(invokeCommand).toHaveBeenCalledWith('translate_to_unicode', {
       input: '안녕',
     })
+  })
+})
+
+describe('translateText reverse mode', () => {
+  test('점자 유니코드를 역점역 명령에 전달한다', async () => {
+    const invokeCommand = mock(async () => '안녕')
+
+    await expect(translateReverseText('  ⠣⠒⠉⠻  ', invokeCommand)).resolves.toBe(
+      '안녕',
+    )
+    expect(invokeCommand).toHaveBeenCalledWith('decode_from_unicode', {
+      input: '⠣⠒⠉⠻',
+    })
+  })
+
+  test('브라우저 개발환경에서도 점자를 한글로 역점역한다', async () => {
+    await expect(translateText('⠣⠒⠉⠻', 'reverse')).resolves.toBe('안녕')
+  })
+
+  test('빈 입력과 일반 문자가 섞인 입력을 거절한다', async () => {
+    const invokeCommand = mock(async () => '호출되지 않아야 함')
+
+    await expect(translateReverseText('   ', invokeCommand)).rejects.toThrow(
+      EMPTY_REVERSE_INPUT_MESSAGE,
+    )
+    await expect(translateReverseText('⠣안녕', invokeCommand)).rejects.toThrow(
+      INVALID_BRAILLE_MESSAGE,
+    )
+    await expect(translateReverseText('⡀', invokeCommand)).rejects.toThrow(
+      INVALID_BRAILLE_MESSAGE,
+    )
+    expect(invokeCommand).not.toHaveBeenCalled()
   })
 })

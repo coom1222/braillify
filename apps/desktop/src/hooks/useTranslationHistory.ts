@@ -7,6 +7,7 @@ import {
   type HistoryEntry,
   type HistoryEntryDraft,
   loadHistory,
+  toggleFavoriteHistoryEntry,
 } from '@/lib/history'
 
 export function useTranslationHistory() {
@@ -28,10 +29,15 @@ export function useTranslationHistory() {
     setEntries(clearHistory())
   }, [])
 
+  const toggleFavorite = useCallback((id: string) => {
+    setEntries(toggleFavoriteHistoryEntry(id))
+  }, [])
+
   return {
     addEntry,
     deleteAll,
     deleteEntry,
     entries,
+    toggleFavorite,
   }
 }

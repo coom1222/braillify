@@ -1,19 +1,31 @@
 import { Button, Flex, Input, Text, VStack } from '@devup-ui/react'
 
+import { BrailleComposer } from './BrailleComposer'
+
 type TranslationInputCardProps = {
+  buttonLabel: string
   errorMessage: string | null
+  helpText: string
   input: string
+  inputLabel: string
   isTranslating: boolean
+  isReverse: boolean
   onChange: (value: string) => void
   onSubmit: () => void
+  placeholder: string
 }
 
 export function TranslationInputCard({
+  buttonLabel,
   errorMessage,
+  helpText,
   input,
+  inputLabel,
   isTranslating,
+  isReverse,
   onChange,
   onSubmit,
+  placeholder,
 }: TranslationInputCardProps) {
   const characterCount = Array.from(input).length
 
@@ -35,22 +47,26 @@ export function TranslationInputCard({
         px="24px"
       >
         <Text as="h2" typography="inputTitle">
-          입력 텍스트
+          {inputLabel}
         </Text>
         <Text aria-live="polite" color="$caption" typography="body">
-          {characterCount}자
+          {characterCount}
+          {isReverse ? '칸' : '자'}
         </Text>
       </Flex>
 
       <Input
         aria-describedby="translation-help"
         aria-invalid={errorMessage ? true : undefined}
-        aria-label="점역할 텍스트"
+        aria-label={inputLabel}
         as="textarea"
         bg="transparent"
         border="none"
         color="$text"
-        minH="224px"
+        fontFamily={isReverse ? 'Segoe UI Symbol, sans-serif' : undefined}
+        fontSize={isReverse ? '24px' : undefined}
+        lineHeight={isReverse ? '1.6' : undefined}
+        minH={isReverse ? '158px' : '224px'}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.ctrlKey && event.key === 'Enter') {
@@ -59,11 +75,13 @@ export function TranslationInputCard({
           }
         }}
         p="26px"
-        placeholder="점역할 텍스트를 입력하세요..."
+        placeholder={placeholder}
         resize="none"
         value={input}
         w="100%"
       />
+
+      {isReverse && <BrailleComposer onChange={onChange} value={input} />}
 
       <Flex
         alignItems="center"
@@ -79,7 +97,7 @@ export function TranslationInputCard({
           role={errorMessage ? 'alert' : undefined}
           typography="body"
         >
-          {errorMessage || 'Ctrl + Enter로 변환'}
+          {errorMessage || helpText}
         </Text>
         <Button
           bg={
@@ -108,7 +126,7 @@ export function TranslationInputCard({
           py="15px"
           typography="button"
         >
-          {isTranslating ? '점역 중…' : '점역하기'}
+          {isTranslating ? '변환 중…' : buttonLabel}
         </Button>
       </Flex>
     </VStack>

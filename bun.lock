@@ -20,6 +20,7 @@
         "@devup-ui/react": "^1.0.37",
         "@tauri-apps/api": "^2",
         "@tauri-apps/plugin-clipboard-manager": "^2",
+        "braillify-web": "https://registry.npmjs.org/braillify/-/braillify-2.1.0.tgz",
         "next": "16.2.10",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
@@ -430,6 +431,8 @@
     "brace-expansion": ["brace-expansion@5.0.7", "", { "dependencies": { "balanced-match": "^4.0.2" } }, "sha512-7oFy703dxfY3/NLxC1fh2SUCQ0H9rmAY+5EpDVfXjUTTs+HEwR2nYaqLv+GWcTsumwxPfiz6CzCNkwXwBUwqCA=="],
 
     "braillify": ["braillify@workspace:packages/node"],
+
+    "braillify-web": ["braillify@https://registry.npmjs.org/braillify/-/braillify-2.1.0.tgz", {}, "sha512-KX4rhdZ9KQL0NkGiRhYryrpxOnetu6wkdDa9E7YS4HyxbeKkm78N1/DtUZ2alNCsENrgpF/lnXrpqR1daYU78g=="],
 
     "browserslist": ["browserslist@4.28.6", "", { "dependencies": { "baseline-browser-mapping": "^2.10.42", "caniuse-lite": "^1.0.30001803", "electron-to-chromium": "^1.5.389", "node-releases": "^2.0.51", "update-browserslist-db": "^1.2.3" }, "bin": { "browserslist": "cli.js" } }, "sha512-FQBYNK15VMslhLHpA7+n+n1GOlF1kId2xcCg7/j95f24AOF6VDYMNH4mFxF7KuaTdv627faazpOAjFzMrfJOUw=="],
 

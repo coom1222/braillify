@@ -4,6 +4,7 @@ mod char_shortcut;
 pub(crate) mod char_struct;
 #[cfg(feature = "cli")]
 pub mod cli;
+pub mod decoder;
 mod encoder;
 pub(crate) mod english;
 pub(crate) mod english_logic;
@@ -121,6 +122,11 @@ mod test_helpers {
 }
 
 pub use encoder::Encoder;
+
+/// Decode Korean braille Unicode back to Korean text.
+pub fn decode(braille: &str) -> Result<String, String> {
+    decoder::decode(braille)
+}
 
 thread_local! {
     static ENCODER_CACHE: RefCell<Option<Encoder>> = const { RefCell::new(None) };
