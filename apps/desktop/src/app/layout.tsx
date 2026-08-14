@@ -1,5 +1,13 @@
 import { globalCss } from '@devup-ui/react'
 import type { Metadata, Viewport } from 'next'
+import localFont from 'next/font/local'
+
+const spoqaHanSansNeo = localFont({
+  display: 'swap',
+  src: './fonts/SpoqaHanSansNeo-Regular.woff2',
+  variable: '--font-spoqa-han-sans-neo',
+  weight: '400',
+})
 
 globalCss({
   'html, body': {
@@ -44,7 +52,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ko">
+    <html className={spoqaHanSansNeo.variable} lang="ko">
       <head>
         <link href="/favicon.svg" rel="icon" />
       </head>

@@ -7,6 +7,7 @@ import {
   HISTORY_STORAGE_KEY,
   loadHistory,
   MAX_HISTORY_ENTRIES,
+  toggleFavoriteHistoryEntry,
 } from './history'
 
 class MemoryStorage {
@@ -39,6 +40,7 @@ describe('translation history', () => {
     expect(loadHistory(storage)).toEqual([
       {
         createdAt: '2026-07-27T12:00:00.000Z',
+        favorite: false,
         id: 'entry-1',
         input: '안녕',
         mode: 'general',
@@ -126,6 +128,7 @@ describe('translation history', () => {
     ).toEqual([
       {
         createdAt: '2026-07-27T12:00:00.000Z',
+        favorite: false,
         id: 'offline-entry',
         input: '안녕',
         mode: 'general',
@@ -151,5 +154,44 @@ describe('translation history', () => {
     expect(deleteHistoryEntry('general-entry', storage)).toHaveLength(1)
     expect(clearHistory(storage)).toEqual([])
     expect(loadHistory(storage)).toEqual([])
+  })
+
+  test('즐겨찾기 상태를 켜고 끄며 기존 기록도 호환한다', () => {
+    const storage = new MemoryStorage()
+    storage.setItem(
+      HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          createdAt: '2026-07-27T12:00:00.000Z',
+          id: 'legacy-entry',
+          input: '안녕',
+          mode: 'general',
+          result: '⠣⠒⠉⠻',
+        },
+      ]),
+    )
+
+    expect(loadHistory(storage)[0]?.favorite).toBe(false)
+    expect(
+      toggleFavoriteHistoryEntry('legacy-entry', storage)[0]?.favorite,
+    ).toBe(true)
+    expect(
+      toggleFavoriteHistoryEntry('legacy-entry', storage)[0]?.favorite,
+    ).toBe(false)
+  })
+
+  test('역점역 기록을 유효한 기록으로 다시 읽는다', () => {
+    const storage = new MemoryStorage()
+    addHistoryEntry(
+      { input: '⠣⠒⠉⠻', mode: 'reverse', result: '안녕' },
+      storage,
+      () => 'reverse-entry',
+    )
+
+    expect(loadHistory(storage)[0]).toMatchObject({
+      id: 'reverse-entry',
+      mode: 'reverse',
+      result: '안녕',
+    })
   })
 })

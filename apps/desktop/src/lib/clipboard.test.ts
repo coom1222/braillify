@@ -23,7 +23,7 @@ describe('copyText', () => {
     expect(writeClipboardText).not.toHaveBeenCalled()
   })
 
-  test('플러그인 실패를 사용자용 오류로 변환한다', async () => {
+  test('클립보드 어댑터 실패를 사용자용 오류로 변환한다', async () => {
     const writeClipboardText = mock(async () => {
       throw new Error('clipboard unavailable')
     })

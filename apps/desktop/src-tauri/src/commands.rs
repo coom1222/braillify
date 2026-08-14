@@ -1,4 +1,5 @@
 const EMPTY_INPUT_MESSAGE: &str = "점역할 내용을 입력해 주세요.";
+const EMPTY_REVERSE_INPUT_MESSAGE: &str = "역점역할 점자를 입력해 주세요.";
 
 #[tauri::command]
 pub(crate) fn translate_to_unicode(input: String) -> Result<String, String> {
@@ -10,9 +11,18 @@ pub(crate) fn translate_to_unicode(input: String) -> Result<String, String> {
         .map_err(|error| format!("점역할 수 없는 내용입니다: {error}"))
 }
 
+#[tauri::command]
+pub(crate) fn decode_from_unicode(input: String) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Err(EMPTY_REVERSE_INPUT_MESSAGE.to_owned());
+    }
+
+    braillify::decode(&input).map_err(|error| format!("역점역할 수 없는 내용입니다: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::translate_to_unicode;
+    use super::{decode_from_unicode, translate_to_unicode};
 
     enum Expected {
         ErrorContaining(&'static str),
@@ -46,5 +56,17 @@ mod tests {
 
         assert_eq!(actual, braillify::encode_to_unicode(&input));
         assert!(!actual.unwrap().is_empty());
+    }
+
+    #[test]
+    fn decodes_unicode_braille_to_korean() {
+        assert_eq!(decode_from_unicode("⠣⠒⠉⠻".to_owned()).unwrap(), "안녕");
+    }
+
+    #[test]
+    fn rejects_empty_reverse_input() {
+        assert!(decode_from_unicode(" \n\t".to_owned())
+            .unwrap_err()
+            .contains("입력"));
     }
 }
