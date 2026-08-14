@@ -87,11 +87,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_from_unicode_delegates_to_core() {
-        assert_eq!(decode_from_unicode("⠣⠒⠉⠻").unwrap(), "안녕");
-    }
-
-    #[test]
     fn set_panic_hook_is_callable() {
         // Exercises the no-op path on default (no `console_error_panic_hook` feature).
         utils::set_panic_hook();

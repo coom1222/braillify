@@ -56,7 +56,10 @@ describe('translateGeneralText', () => {
   test('브라우저에서는 WASM 어댑터로 정상 점역한다', async () => {
     const translateToUnicode = mock(() => '⠣⠒⠉⠻')
 
-    mock.module('braillify-web', () => ({ translateToUnicode }))
+    mock.module('braillify', () => ({
+      decodeFromUnicode: () => '안녕',
+      translateToUnicode,
+    }))
 
     await expect(translateGeneralText('안녕')).resolves.toBe('⠣⠒⠉⠻')
 

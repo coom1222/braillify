@@ -7,6 +7,15 @@ const nextConfig: NextConfig = {
   },
   output: 'export',
   reactCompiler: true,
+  webpack(config, { isServer, dev }) {
+    config.experiments = { ...config.experiments, asyncWebAssembly: true }
+    config.output.webassemblyModuleFilename =
+      isServer && !dev
+        ? '../static/wasm/[modulehash].wasm'
+        : 'static/wasm/[modulehash].wasm'
+
+    return config
+  },
 }
 
 export default DevupUI(nextConfig, {})

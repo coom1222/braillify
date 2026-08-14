@@ -1,7 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 
 import type { TranslateMode } from '@/constants/translation'
-import { decodeBraille } from '@/lib/braille-decoder'
 
 export const EMPTY_INPUT_MESSAGE = '점역할 내용을 입력해 주세요.'
 export const MATH_DELIMITER_MESSAGE =
@@ -25,14 +24,10 @@ const invokeBrowserTranslation: InvokeCommand = async (command, args) => {
     throw new Error(`지원하지 않는 점역 명령입니다: ${command}`)
   }
 
-  if (command === 'decode_from_unicode') {
-    return decodeBraille(args.input)
-  }
+  const { decodeFromUnicode, translateToUnicode } = await import('braillify')
 
-  if (command === 'translate_to_unicode') {
-    const { translateToUnicode } = await import('braillify-web')
-    return translateToUnicode(args.input)
-  }
+  if (command === 'decode_from_unicode') return decodeFromUnicode(args.input)
+  if (command === 'translate_to_unicode') return translateToUnicode(args.input)
 
   throw new Error(`지원하지 않는 점역 명령입니다: ${command}`)
 }
