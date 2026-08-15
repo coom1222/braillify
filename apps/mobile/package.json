@@ -17,9 +17,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@devup-ui/components": "^0.1.46",
     "@devup-ui/react": "^1.0.37",
-    "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "braillify": "workspace:*",
     "next": "16.2.6",
