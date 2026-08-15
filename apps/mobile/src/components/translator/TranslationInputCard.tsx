@@ -1,9 +1,10 @@
 import { Button, Flex, Input, Text, VStack } from '@devup-ui/react'
-
-import { BrailleComposer } from './BrailleComposer'
+import type { ReactNode } from 'react'
 
 type TranslationInputCardProps = {
   buttonLabel: string
+  // 역점역 6점 입력기. 서버에서 조합된 정적 셸이 내려온다(활성 시에만 표시).
+  composerSlot: ReactNode
   errorMessage: string | null
   helpText: string
   input: string
@@ -17,6 +18,7 @@ type TranslationInputCardProps = {
 
 export function TranslationInputCard({
   buttonLabel,
+  composerSlot,
   errorMessage,
   helpText,
   input,
@@ -79,7 +81,7 @@ export function TranslationInputCard({
         value={input}
       />
 
-      {isReverse && <BrailleComposer onChange={onChange} value={input} />}
+      {isReverse && composerSlot}
 
       <Flex
         alignItems="center"
