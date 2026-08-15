@@ -1,49 +1,67 @@
 import { globalCss } from '@devup-ui/react'
 import type { Metadata, Viewport } from 'next'
+import localFont from 'next/font/local'
+
+const spoqaHanSansNeo = localFont({
+  display: 'swap',
+  src: './fonts/SpoqaHanSansNeo-Regular.woff2',
+  variable: '--font-spoqa-han-sans-neo',
+  weight: '400',
+})
+
+globalCss({
+  'html, body': {
+    minHeight: '100%',
+  },
+  body: {
+    background: '$background',
+    color: '$text',
+    fontFamily: 'Segoe UI, Malgun Gothic, sans-serif',
+    overflowX: 'hidden',
+    WebkitTapHighlightColor: 'transparent',
+  },
+  '*': {
+    boxSizing: 'border-box',
+    margin: 0,
+    padding: 0,
+  },
+  'button, textarea': {
+    font: 'inherit',
+  },
+  'button:focus-visible, textarea:focus-visible, [tabindex]:focus-visible': {
+    outlineWidth: '3px',
+    outlineStyle: 'solid',
+    outlineColor: '$focus',
+    outlineOffset: '2px',
+  },
+  '::selection': {
+    background: '$focus',
+    color: '$base',
+  },
+})
 
 export const metadata: Metadata = {
+  applicationName: 'Braillify',
+  description: '2024 개정 한국 점자 규정 기반의 오프라인 점역기',
   title: 'Braillify',
-  description: '한국어 텍스트를 한국 점자로 변환하는 점역기',
 }
 
 export const viewport: Viewport = {
+  colorScheme: 'light',
+  themeColor: '#F3F2EF',
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   viewportFit: 'cover',
 }
-
-// 기존 src/global.css 를 devup-ui globalCss 로 이식 (#root 의존 제거)
-globalCss({
-  '*, *::before, *::after': {
-    boxSizing: 'border-box',
-  },
-  'html, body': {
-    height: '100%',
-  },
-  body: {
-    margin: 0,
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Pretendard, "Noto Sans KR", "Segoe UI", Roboto, sans-serif',
-    background: '#f2f2f2',
-    color: '#1a1a1a',
-    WebkitTapHighlightColor: 'transparent',
-  },
-  button: {
-    fontFamily: 'inherit',
-    cursor: 'pointer',
-  },
-  'input, textarea': {
-    fontFamily: 'inherit',
-  },
-})
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ko">
+    <html className={spoqaHanSansNeo.variable} lang="ko">
+      <head>
+        <link href="/favicon.svg" rel="icon" />
+      </head>
       <body>{children}</body>
     </html>
   )

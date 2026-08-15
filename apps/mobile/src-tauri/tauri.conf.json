@@ -13,8 +13,11 @@
     "windows": [
       {
         "title": "Braillify",
-        "width": 393,
-        "height": 853
+        "width": 1024,
+        "height": 720,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
       }
     ],
     "security": {
