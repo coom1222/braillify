@@ -3,17 +3,10 @@
 import { Button, Flex, Text, VStack } from '@devup-ui/react'
 import { useMemo, useState } from 'react'
 
+import { useAppState } from '@/components/shell/AppShell'
 import { MODE_CONTENT } from '@/constants/translation'
 import { copyText } from '@/lib/clipboard'
 import type { HistoryEntry } from '@/lib/history'
-
-type HistoryPanelProps = {
-  entries: HistoryEntry[]
-  onClear: () => void
-  onDelete: (id: string) => void
-  onRestore: (entry: HistoryEntry) => void
-  onToggleFavorite: (id: string) => void
-}
 
 function formatCreatedAt(value: string): string {
   return new Intl.DateTimeFormat('ko-KR', {
@@ -22,13 +15,9 @@ function formatCreatedAt(value: string): string {
   }).format(new Date(value))
 }
 
-export function HistoryPanel({
-  entries,
-  onClear,
-  onDelete,
-  onRestore,
-  onToggleFavorite,
-}: HistoryPanelProps) {
+export function HistoryPanel() {
+  const { deleteAll, deleteEntry, entries, requestRestore, toggleFavorite } =
+    useAppState()
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [copyErrorId, setCopyErrorId] = useState<string | null>(null)
@@ -98,7 +87,7 @@ export function HistoryPanel({
           color="$error"
           cursor={entries.length ? 'pointer' : 'default'}
           disabled={!entries.length}
-          onClick={onClear}
+          onClick={deleteAll}
           px="14px"
           py="9px"
           type="button"
@@ -170,7 +159,7 @@ export function HistoryPanel({
                   color={entry.favorite ? '$focus' : '$caption'}
                   cursor="pointer"
                   fontSize="24px"
-                  onClick={() => onToggleFavorite(entry.id)}
+                  onClick={() => toggleFavorite(entry.id)}
                   px="8px"
                   py="4px"
                   type="button"
@@ -240,7 +229,7 @@ export function HistoryPanel({
                   borderRadius="9px"
                   color="$base"
                   cursor="pointer"
-                  onClick={() => onRestore(entry)}
+                  onClick={() => requestRestore(entry)}
                   px="12px"
                   py="9px"
                   type="button"
@@ -254,7 +243,7 @@ export function HistoryPanel({
                   borderRadius="9px"
                   color="$error"
                   cursor="pointer"
-                  onClick={() => onDelete(entry.id)}
+                  onClick={() => deleteEntry(entry.id)}
                   px="12px"
                   py="8px"
                   type="button"

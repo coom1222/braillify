@@ -3,34 +3,20 @@
 import { Button, Flex, Text, VStack } from '@devup-ui/react'
 import { useEffect, useState } from 'react'
 
+import { useAppState } from '@/components/shell/AppShell'
 import {
   MODE_CONTENT,
   MODE_OPTIONS,
   type TranslateMode,
 } from '@/constants/translation'
 import { copyText } from '@/lib/clipboard'
-import type { HistoryEntryDraft } from '@/lib/history'
 import { translateText } from '@/lib/translate'
 
 import { TranslationInputCard } from './TranslationInputCard'
 import { type CopyState, TranslationOutput } from './TranslationOutput'
 
-export type TranslationDraft = {
-  input: string
-  mode: TranslateMode
-  requestId: number
-  result: string
-}
-
-type TranslatorWorkspaceProps = {
-  initialDraft: TranslationDraft | null
-  onAddHistory: (entry: HistoryEntryDraft) => void
-}
-
-export function TranslatorWorkspace({
-  initialDraft,
-  onAddHistory,
-}: TranslatorWorkspaceProps) {
+export function TranslatorWorkspace() {
+  const { addEntry, restoreDraft } = useAppState()
   const [mode, setMode] = useState<TranslateMode>('general')
   const [input, setInput] = useState('')
   const [result, setResult] = useState('')
@@ -40,16 +26,16 @@ export function TranslatorWorkspace({
   const content = MODE_CONTENT[mode]
 
   useEffect(() => {
-    if (!initialDraft) {
+    if (!restoreDraft) {
       return
     }
 
-    setMode(initialDraft.mode)
-    setInput(initialDraft.input)
-    setResult(initialDraft.result)
+    setMode(restoreDraft.mode)
+    setInput(restoreDraft.input)
+    setResult(restoreDraft.result)
     setErrorMessage(null)
     setCopyState('idle')
-  }, [initialDraft])
+  }, [restoreDraft])
 
   const copyResult = async () => {
     try {
@@ -72,7 +58,7 @@ export function TranslatorWorkspace({
       const translatedResult = await translateText(input, mode)
       setResult(translatedResult)
       setCopyState('idle')
-      onAddHistory({
+      addEntry({
         input,
         mode,
         result: translatedResult,
