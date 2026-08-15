@@ -24,12 +24,26 @@ export function ViewPanel({
   const { activeView } = useAppState()
 
   return (
-    <VStack gap="28px" hidden={activeView !== view}>
-      <VStack gap="8px">
-        <Text as="h2" typography="pageTitle">
+    <VStack
+      display={activeView === view ? 'flex' : 'none'}
+      gap={['16px', null, '28px']}
+    >
+      <VStack gap={['6px', null, '8px']}>
+        <Text
+          as="h2"
+          fontSize={['24px', null, '34px']}
+          fontWeight="750"
+          letterSpacing="-0.035em"
+          lineHeight="1.3"
+        >
           {title}
         </Text>
-        <Text color="$caption" typography="pageDescription">
+        <Text
+          color="$caption"
+          fontSize={['14px', null, '17px']}
+          letterSpacing="-0.02em"
+          lineHeight="1.55"
+        >
           {description}
         </Text>
       </VStack>

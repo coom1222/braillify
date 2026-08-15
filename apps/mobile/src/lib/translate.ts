@@ -77,7 +77,7 @@ export async function translateReverseText(
   }
 }
 
-export function validateMathInput(input: string): string {
+function validateMathInput(input: string): string {
   const normalizedInput = input.trim()
 
   if (

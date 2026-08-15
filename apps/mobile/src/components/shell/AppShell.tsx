@@ -41,8 +41,8 @@ export function useAppState(): AppState {
   return state
 }
 
-// 앱의 유일한 client island. activeView·복원·히스토리 상태만 소유하고
-// 반응형 셸을 렌더한다. 각 화면(children)은 서버에서 조합되어 내려온다.
+// 앱 전역의 activeView·복원·히스토리 상태를 소유하는 client boundary.
+// 각 화면(children)의 정적 골격은 서버에서 조합되어 내려온다.
 export function AppShell({ children }: { children: ReactNode }) {
   const [activeView, setActiveView] = useState<AppView>('translator')
   const [restoreDraft, setRestoreDraft] = useState<TranslationDraft | null>(
@@ -88,7 +88,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           '320px minmax(0, 1fr)',
         ]}
         minH="100dvh"
-        w="100%"
       >
         <AppSidebar activeView={activeView} onNavigate={setActiveView} />
         <VStack
@@ -96,7 +95,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           gap="28px"
           minW="0"
           pb={['96px', null, '48px']}
-          pt={['24px', null, '48px']}
+          pt={['max(env(safe-area-inset-top, 0px), 59px)', null, '48px']}
           px={['20px', null, '48px', null, '60px']}
         >
           {children}

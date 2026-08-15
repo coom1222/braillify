@@ -26,16 +26,20 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
 
   return (
     <Flex
-      alignItems="center"
+      alignItems={['flex-start', null, 'center']}
       bg="$background"
       borderTop="1px solid $border"
       flexWrap="wrap"
-      gap="20px"
+      gap={['12px', null, '20px']}
       justifyContent="space-between"
       px="24px"
       py="18px"
     >
-      <VStack gap="6px" minW="148px">
+      <VStack
+        flex={['1 1 0', null, '0 0 auto']}
+        gap="6px"
+        minW={['0', null, '148px']}
+      >
         <Text typography="inputTitle">6점 입력기</Text>
         <Text color="$caption" typography="sidebarCaption">
           점을 고른 뒤 셀을 추가하세요.
@@ -46,8 +50,12 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
         aria-label="역점역 점자 점 선택"
         as="fieldset"
         border="none"
+        flexShrink="0"
         gap="8px"
         gridTemplateColumns="repeat(2, 42px)"
+        m="0"
+        order={[2, null, 0]}
+        p="0"
       >
         {DOTS.map((dot) => {
           const selected = selectedDots.includes(dot)
@@ -73,7 +81,7 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
         })}
       </Grid>
 
-      <VStack alignItems="center" gap="6px">
+      <VStack alignItems="center" flexShrink="0" gap="6px" order={[1, null, 0]}>
         <Text color="$caption" typography="sidebarCaption">
           현재 셀
         </Text>
@@ -93,21 +101,34 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
         </Text>
       </VStack>
 
-      <Flex flexWrap="wrap" gap="8px" justifyContent="flex-end" maxW="300px">
+      <Flex
+        flex={['1 0 100%', null, '0 1 auto']}
+        flexWrap={['nowrap', null, 'wrap']}
+        gap={['6px', null, '8px']}
+        justifyContent="flex-end"
+        maxW={['100%', null, '300px']}
+        minW="0"
+        order={[3, null, 0]}
+        w={['100%', null, 'auto']}
+      >
         <Button
           bg="$primary"
           border="none"
           borderRadius="9px"
           color="$base"
           cursor="pointer"
+          flex={['1 1 0', null, '0 0 auto']}
+          fontSize={['12px', null, '14px']}
+          minW="0"
           onClick={() => {
             onChange(value + preview)
             setSelectedDots([])
           }}
-          px="14px"
+          px={['4px', null, '14px']}
           py="9px"
           type="button"
           typography="button"
+          whiteSpace="nowrap"
         >
           셀 추가
         </Button>
@@ -117,10 +138,14 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
           borderRadius="9px"
           color="$text"
           cursor="pointer"
+          flex={['1 1 0', null, '0 0 auto']}
+          fontSize={['12px', null, '14px']}
+          minW="0"
           onClick={() => onChange(value + ' ')}
-          px="12px"
+          px={['4px', null, '12px']}
           py="9px"
           type="button"
+          whiteSpace="nowrap"
         >
           띄어쓰기
         </Button>
@@ -131,10 +156,14 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
           color="$text"
           cursor={value ? 'pointer' : 'default'}
           disabled={!value}
+          flex={['1 1 0', null, '0 0 auto']}
+          fontSize={['12px', null, '14px']}
+          minW="0"
           onClick={() => onChange(deleteLastCharacter(value))}
-          px="12px"
+          px={['4px', null, '12px']}
           py="9px"
           type="button"
+          whiteSpace="nowrap"
         >
           한 칸 삭제
         </Button>
@@ -145,13 +174,17 @@ export function BrailleComposer({ onChange, value }: BrailleComposerProps) {
           color="$error"
           cursor={value ? 'pointer' : 'default'}
           disabled={!value}
+          flex={['1 1 0', null, '0 0 auto']}
+          fontSize={['12px', null, '14px']}
+          minW="0"
           onClick={() => {
             onChange('')
             setSelectedDots([])
           }}
-          px="12px"
+          px={['4px', null, '12px']}
           py="9px"
           type="button"
+          whiteSpace="nowrap"
         >
           전체 지우기
         </Button>

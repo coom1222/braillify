@@ -19,9 +19,11 @@ export function BottomTabBar({ activeView, onNavigate }: BottomTabBarProps) {
       bottom="0"
       display={['grid', null, 'none']}
       gridTemplateColumns={`repeat(${SIDEBAR_ITEMS.length}, 1fr)`}
+      left="0"
       pb="calc(env(safe-area-inset-bottom, 0px) + 6px)"
-      position="sticky"
+      position="fixed"
       pt="8px"
+      right="0"
       zIndex={10}
     >
       {SIDEBAR_ITEMS.map((item) => {

@@ -37,7 +37,6 @@ export function TranslationInputCard({
       borderRadius="20px"
       boxShadow="0 1px 3px rgba(34, 34, 34, 0.04)"
       overflow="hidden"
-      w="100%"
     >
       <Flex
         alignItems="center"
@@ -78,7 +77,6 @@ export function TranslationInputCard({
         placeholder={placeholder}
         resize="none"
         value={input}
-        w="100%"
       />
 
       {isReverse && <BrailleComposer onChange={onChange} value={input} />}
@@ -98,6 +96,11 @@ export function TranslationInputCard({
           typography="body"
         >
           {errorMessage || helpText}
+          {!errorMessage && (
+            <Text as="span" display={['none', null, 'inline']}>
+              {helpText ? ' · ' : ''}Ctrl + Enter로 변환
+            </Text>
+          )}
         </Text>
         <Button
           bg={

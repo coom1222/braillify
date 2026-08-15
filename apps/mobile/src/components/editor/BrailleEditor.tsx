@@ -1,43 +1,63 @@
 'use client'
 
-import { Button, Flex, Grid, Input, Text, VStack } from '@devup-ui/react'
-import { useState } from 'react'
+import { Box, Button, Flex, Grid, Input, Text, VStack } from '@devup-ui/react'
+import { useMemo, useState } from 'react'
 
-import { type CopyState } from '@/components/translator/TranslationOutput'
-import { createBrailleCell, deleteLastCharacter } from '@/lib/braille-editor'
+import type { CopyState } from '@/components/translator/TranslationOutput'
+import {
+  brailleMasksToString,
+  type DotNumber,
+  mirrorBrailleMask,
+  parseBrailleString,
+  toggleBrailleDot,
+} from '@/lib/braille-editor'
 import { copyText } from '@/lib/clipboard'
 
-const DOTS = [1, 4, 2, 5, 3, 6] as const
+const DOT_LAYOUT = [1, 2, 3, 4, 5, 6] as const
 
-const COPY_STATUS = {
-  copied: '편집한 점자를 클립보드에 복사했습니다.',
-  error: '점자를 복사하지 못했습니다. 다시 시도해 주세요.',
-  idle: '',
+const COPY_LABEL = {
+  copied: '복사됨',
+  error: '복사 실패',
+  idle: '복사',
 } as const satisfies Record<CopyState, string>
 
 export function BrailleEditor() {
-  const [content, setContent] = useState('')
+  const [cells, setCells] = useState<number[]>([0])
+  const [intaglio, setIntaglio] = useState(false)
+  const [importInput, setImportInput] = useState('')
+  const [importError, setImportError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<CopyState>('idle')
-  const [selectedDots, setSelectedDots] = useState<number[]>([])
-  const preview = createBrailleCell(selectedDots)
+  const previewMasks = useMemo(
+    () => (intaglio ? cells.map(mirrorBrailleMask) : cells),
+    [cells, intaglio],
+  )
+  const preview = useMemo(
+    () => brailleMasksToString(previewMasks),
+    [previewMasks],
+  )
 
-  const toggleDot = (dot: number) => {
-    setSelectedDots((current) =>
-      current.includes(dot)
-        ? current.filter((selectedDot) => selectedDot !== dot)
-        : [...current, dot],
-    )
-  }
+  const importBraille = () => {
+    const value = importInput.trim()
+    if (!value) {
+      setImportError('점자 문자열을 붙여넣어 주세요.')
+      return
+    }
 
-  const appendCell = () => {
-    setContent((current) => current + preview)
-    setSelectedDots([])
+    const parsed = parseBrailleString(value)
+    if (!parsed) {
+      setImportError('U+2800 범위의 점자 문자만 사용할 수 있습니다.')
+      return
+    }
+
+    setCells(parsed.length ? parsed : [0])
+    setImportInput('')
+    setImportError(null)
     setCopyState('idle')
   }
 
-  const copyContent = async () => {
+  const copyPreview = async () => {
     try {
-      await copyText(content)
+      await copyText(preview)
       setCopyState('copied')
     } catch {
       setCopyState('error')
@@ -45,226 +65,271 @@ export function BrailleEditor() {
   }
 
   return (
-    <Grid
-      gap="24px"
-      gridTemplateColumns="minmax(280px, 0.72fr) minmax(0, 1.28fr)"
-      w="100%"
-    >
-      <VStack
-        as="section"
-        bg="$containerBackground"
-        border="1px solid $border"
-        borderRadius="20px"
-        gap="22px"
-        p="24px"
-      >
-        <VStack gap="6px">
-          <Text as="h3" typography="inputTitle">
-            6점 조합
+    <VStack gap="16px" pb="12px">
+      <EditorCard>
+        <Flex alignItems="center" gap="12px" justifyContent="space-between">
+          <Text fontWeight="600" typography="sidebarBody">
+            미리보기
           </Text>
-          <Text color="$caption" typography="sidebarBody">
-            점을 선택하고 셀 추가를 누르세요. 선택이 없으면 빈 점자 셀이
-            추가됩니다.
-          </Text>
-        </VStack>
-
-        <Grid
-          aria-label="점자 점 선택"
-          as="fieldset"
-          border="none"
-          gap="16px"
-          gridTemplateColumns="repeat(2, 72px)"
-          justifyContent="center"
+          <Flex alignItems="center" gap="12px">
+            <Flex alignItems="center" gap="8px">
+              <Text as="label" color="$caption" typography="sidebarCaption">
+                좌우 반전
+              </Text>
+              <Button
+                aria-label="좌우 반전 미리보기"
+                aria-pressed={intaglio}
+                bg={intaglio ? '$primary' : '$disabledBackground'}
+                border="none"
+                borderRadius="999px"
+                cursor="pointer"
+                h="22px"
+                onClick={() => setIntaglio((current) => !current)}
+                position="relative"
+                type="button"
+                w="38px"
+              >
+                <Box
+                  bg="$containerBackground"
+                  borderRadius="50%"
+                  h="16px"
+                  left={intaglio ? '19px' : '3px'}
+                  position="absolute"
+                  top="3px"
+                  transition="left 150ms ease"
+                  w="16px"
+                />
+              </Button>
+            </Flex>
+            <OutlineButton onClick={copyPreview}>
+              {COPY_LABEL[copyState]}
+            </OutlineButton>
+          </Flex>
+        </Flex>
+        <Box
+          aria-live="polite"
+          fontFamily="Segoe UI Symbol, sans-serif"
+          fontSize="32px"
+          letterSpacing="4px"
+          lineHeight="1.4"
+          minH="64px"
+          py="6px"
+          wordBreak="break-all"
         >
-          {DOTS.map((dot) => {
-            const isSelected = selectedDots.includes(dot)
+          {preview}
+        </Box>
+      </EditorCard>
+
+      <EditorCard>
+        <Text fontWeight="600" typography="sidebarBody">
+          점자 가져오기
+        </Text>
+        <Input
+          aria-invalid={Boolean(importError)}
+          aria-label="가져올 점자 문자열"
+          bg="$background"
+          border="1px solid $border"
+          borderRadius="8px"
+          onChange={(event) => {
+            setImportInput(event.target.value)
+            setImportError(null)
+          }}
+          p="12px"
+          placeholder="점자 문자열을 붙여넣으세요 (U+2800 범위)"
+          value={importInput}
+        />
+        {importError && (
+          <Text color="$error" role="alert" typography="sidebarCaption">
+            {importError}
+          </Text>
+        )}
+        <Button
+          bg="$primary"
+          border="none"
+          borderRadius="8px"
+          color="$base"
+          cursor="pointer"
+          onClick={importBraille}
+          py="12px"
+          type="button"
+          typography="button"
+        >
+          가져오기
+        </Button>
+      </EditorCard>
+
+      <EditorCard>
+        <Flex alignItems="center" gap="12px" justifyContent="space-between">
+          <Text fontWeight="600" typography="sidebarBody">
+            점자 셀 편집 ({cells.length}셀)
+          </Text>
+          <Flex gap="8px">
+            <OutlineButton
+              onClick={() => setCells((current) => [...current, 0])}
+            >
+              + 셀
+            </OutlineButton>
+            <Button
+              bg="transparent"
+              border="1px solid $error"
+              borderRadius="8px"
+              color="$error"
+              cursor="pointer"
+              onClick={() => {
+                setCells([0])
+                setCopyState('idle')
+              }}
+              px="14px"
+              py="7px"
+              type="button"
+              typography="sidebarBody"
+            >
+              초기화
+            </Button>
+          </Flex>
+        </Flex>
+        <Grid
+          gap="16px"
+          gridTemplateColumns="repeat(auto-fill, minmax(80px, 1fr))"
+          py="4px"
+        >
+          {cells.map((mask, index) => (
+            <EditableBrailleCell
+              key={index}
+              index={index}
+              mask={mask}
+              onRemove={() => {
+                setCells((current) =>
+                  current.length === 1
+                    ? [0]
+                    : current.filter((_, cellIndex) => cellIndex !== index),
+                )
+                setCopyState('idle')
+              }}
+              onToggleDot={(dot) => {
+                setCells((current) =>
+                  current.map((cell, cellIndex) =>
+                    cellIndex === index ? toggleBrailleDot(cell, dot) : cell,
+                  ),
+                )
+                setCopyState('idle')
+              }}
+            />
+          ))}
+        </Grid>
+      </EditorCard>
+
+      <EditorCard>
+        <Text fontWeight="600" typography="sidebarBody">
+          점 번호
+        </Text>
+        <Text color="$caption" typography="sidebarCaption">
+          왼쪽: 1·2·3 / 오른쪽: 4·5·6
+        </Text>
+      </EditorCard>
+    </VStack>
+  )
+}
+
+function EditableBrailleCell({
+  index,
+  mask,
+  onRemove,
+  onToggleDot,
+}: {
+  index: number
+  mask: number
+  onRemove: () => void
+  onToggleDot: (dot: DotNumber) => void
+}) {
+  return (
+    <VStack alignItems="center" gap="6px">
+      <Text color="$caption" typography="sidebarCaption">
+        #{index + 1}
+      </Text>
+      <Box bg="$background" borderRadius="12px" px="14px" py="12px">
+        <Grid
+          gap="6px"
+          gridAutoFlow="column"
+          gridTemplateColumns="repeat(2, 22px)"
+          gridTemplateRows="repeat(3, 22px)"
+        >
+          {DOT_LAYOUT.map((dot) => {
+            const active = (mask & (1 << (dot - 1))) !== 0
 
             return (
               <Button
                 key={dot}
-                aria-label={`점 ${dot}`}
-                aria-pressed={isSelected}
-                bg={isSelected ? '$primary' : '$background'}
-                border="2px solid $border"
-                borderRadius="999px"
-                color={isSelected ? '$base' : '$text'}
+                aria-label={`${index + 1}번 셀 점 ${dot}`}
+                aria-pressed={active}
+                bg={active ? '$primary' : '$containerBackground'}
+                border="1.5px solid $border"
+                borderRadius="50%"
                 cursor="pointer"
-                fontSize="20px"
-                h="72px"
-                onClick={() => toggleDot(dot)}
+                h="22px"
+                onClick={() => onToggleDot(dot)}
+                p="0"
                 type="button"
-                w="72px"
-              >
-                {dot}
-              </Button>
+                w="22px"
+              />
             )
           })}
         </Grid>
-
-        <VStack alignItems="center" gap="12px">
-          <Text color="$caption" typography="sidebarBody">
-            현재 셀
-          </Text>
-          <Text
-            aria-label="현재 점자 셀"
-            border="1px solid $border"
-            borderRadius="14px"
-            fontFamily="Segoe UI Symbol, sans-serif"
-            fontSize="48px"
-            h="78px"
-            lineHeight="78px"
-            textAlign="center"
-            w="92px"
-          >
-            {preview}
-          </Text>
-          <Button
-            bg="$primary"
-            border="none"
-            borderRadius="12px"
-            color="$base"
-            cursor="pointer"
-            onClick={appendCell}
-            px="24px"
-            py="13px"
-            type="button"
-            typography="button"
-          >
-            셀 추가
-          </Button>
-        </VStack>
-      </VStack>
-
-      <VStack
-        as="section"
-        bg="$containerBackground"
-        border="1px solid $border"
-        borderRadius="20px"
-        overflow="hidden"
+      </Box>
+      <Button
+        aria-label={`${index + 1}번 셀 삭제`}
+        bg="transparent"
+        border="none"
+        color="$caption"
+        cursor="pointer"
+        fontSize="18px"
+        lineHeight="1"
+        onClick={onRemove}
+        p="0"
+        type="button"
       >
-        <Flex
-          alignItems="center"
-          borderBottom="1px solid $border"
-          justifyContent="space-between"
-          minH="66px"
-          px="24px"
-        >
-          <Text as="h3" typography="inputTitle">
-            편집 내용
-          </Text>
-          <Text aria-live="polite" color="$caption" typography="body">
-            {Array.from(content).length}칸
-          </Text>
-        </Flex>
+        ×
+      </Button>
+    </VStack>
+  )
+}
 
-        <Input
-          aria-label="점자 편집 내용"
-          as="textarea"
-          bg="transparent"
-          border="none"
-          color="$text"
-          fontFamily="var(--font-spoqa-han-sans-neo), Segoe UI Symbol, sans-serif"
-          fontSize="20px"
-          lineHeight="1.5"
-          minH="292px"
-          onChange={(event) => {
-            setContent(event.target.value)
-            setCopyState('idle')
-          }}
-          p="22px"
-          placeholder="점자 셀을 조합하거나 유니코드 점자를 직접 입력하세요."
-          resize="none"
-          value={content}
-          w="100%"
-        />
+function EditorCard({ children }: { children: React.ReactNode }) {
+  return (
+    <VStack
+      bg="$containerBackground"
+      border="1px solid $border"
+      borderRadius="12px"
+      gap="10px"
+      px="16px"
+      py="14px"
+    >
+      {children}
+    </VStack>
+  )
+}
 
-        <Flex
-          alignItems="center"
-          borderTop="1px solid $border"
-          flexWrap="wrap"
-          gap="10px"
-          justifyContent="flex-end"
-          minH="88px"
-          px="20px"
-          py="14px"
-        >
-          <Button
-            bg="$background"
-            border="1px solid $border"
-            borderRadius="10px"
-            color="$text"
-            cursor="pointer"
-            onClick={() => {
-              setContent((current) => current + ' ')
-              setCopyState('idle')
-            }}
-            px="14px"
-            py="10px"
-            type="button"
-          >
-            띄어쓰기
-          </Button>
-          <Button
-            bg="$background"
-            border="1px solid $border"
-            borderRadius="10px"
-            color="$text"
-            cursor="pointer"
-            disabled={!content}
-            onClick={() => {
-              setContent((current) => deleteLastCharacter(current))
-              setCopyState('idle')
-            }}
-            px="14px"
-            py="10px"
-            type="button"
-          >
-            한 칸 삭제
-          </Button>
-          <Button
-            bg="$background"
-            border="1px solid $border"
-            borderRadius="10px"
-            color="$error"
-            cursor="pointer"
-            disabled={!content}
-            onClick={() => {
-              setContent('')
-              setCopyState('idle')
-            }}
-            px="14px"
-            py="10px"
-            type="button"
-          >
-            전체 지우기
-          </Button>
-          <Button
-            bg={content ? '$primary' : '$disabledBackground'}
-            border="none"
-            borderRadius="10px"
-            color={content ? '$base' : '$disabledText'}
-            cursor={content ? 'pointer' : 'default'}
-            disabled={!content}
-            onClick={() => void copyContent()}
-            px="16px"
-            py="11px"
-            type="button"
-            typography="button"
-          >
-            편집 내용 복사
-          </Button>
-        </Flex>
-        <Text
-          color={copyState === 'error' ? '$error' : '$caption'}
-          minH="30px"
-          pb="12px"
-          px="24px"
-          role={copyState === 'error' ? 'alert' : 'status'}
-          typography="sidebarBody"
-        >
-          {COPY_STATUS[copyState]}
-        </Text>
-      </VStack>
-    </Grid>
+function OutlineButton({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode
+  onClick: () => void
+}) {
+  return (
+    <Button
+      bg="$containerBackground"
+      border="1px solid $border"
+      borderRadius="8px"
+      color="$text"
+      cursor="pointer"
+      onClick={onClick}
+      px="14px"
+      py="7px"
+      type="button"
+      typography="sidebarBody"
+    >
+      {children}
+    </Button>
   )
 }

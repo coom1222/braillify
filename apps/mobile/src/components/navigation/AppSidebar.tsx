@@ -67,7 +67,6 @@ export function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
               px="18px"
               textAlign="left"
               type="button"
-              w="100%"
             >
               <Text
                 aria-hidden="true"

@@ -17,15 +17,15 @@ export default function HomePage() {
         <TranslatorWorkspace />
       </ViewPanel>
       <ViewPanel
-        description="6점 조합으로 점자 셀을 만들거나 유니코드 점자를 직접 편집합니다."
+        description="점 단위로 직접 점자를 조합하고 좌우 반전으로 양각 인쇄 레이아웃을 확인하세요."
         title="점자 편집기"
         view="editor"
       >
         <BrailleEditor />
       </ViewPanel>
       <ViewPanel
-        description="최근 점역 결과를 확인하고 즐겨찾기, 복사, 삭제 또는 다시 불러오기를 할 수 있습니다."
-        title="히스토리"
+        description="최근 점역 작업 내역과 즐겨찾기를 관리합니다."
+        title="점역 히스토리"
         view="history"
       >
         <HistoryPanel />

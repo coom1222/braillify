@@ -84,17 +84,17 @@ export function TranslatorWorkspace() {
         ) {
           event.preventDefault()
           if (result) {
-            void copyResult()
+            copyResult()
           }
         }
       }}
-      w="100%"
     >
       <Flex
-        alignItems="center"
+        alignItems={['stretch', null, 'center']}
         bg="$containerBackground"
         border="1px solid $border"
         borderRadius="16px"
+        flexDirection={['column', null, 'row']}
         gap="18px"
         justifyContent="space-between"
         px="20px"
@@ -108,7 +108,16 @@ export function TranslatorWorkspace() {
             {content.guide}
           </Text>
         </VStack>
-        <Flex aria-label="점역 모드" as="fieldset" border="none" gap="8px">
+        <Flex
+          aria-label="점역 모드"
+          as="fieldset"
+          border="none"
+          gap="8px"
+          m="0"
+          minW="0"
+          p="0"
+          w={['100%', null, 'auto']}
+        >
           {MODE_OPTIONS.map((option) => {
             const isSelected = option.value === mode
 
@@ -121,6 +130,8 @@ export function TranslatorWorkspace() {
                 borderRadius="10px"
                 color={isSelected ? '$base' : '$text'}
                 cursor="pointer"
+                flex={['1 1 0', null, '0 0 auto']}
+                minW="0"
                 onClick={() => {
                   if (option.value === mode) {
                     return
@@ -135,6 +146,7 @@ export function TranslatorWorkspace() {
                 py="10px"
                 type="button"
                 typography="button"
+                whiteSpace="nowrap"
               >
                 {option.label}
               </Button>
@@ -147,10 +159,10 @@ export function TranslatorWorkspace() {
         errorMessage={errorMessage}
         helpText={
           mode === 'math'
-            ? '수식은 $...$로 감싸세요 · Ctrl + Enter로 변환'
+            ? '수식은 $...$로 감싸세요'
             : mode === 'reverse'
-              ? '점자 유니코드를 붙여넣거나 6점 입력기를 사용하세요 · Ctrl + Enter로 변환'
-              : 'Ctrl + Enter로 변환'
+              ? '점자 유니코드를 붙여넣거나 6점 입력기를 사용하세요'
+              : ''
         }
         input={input}
         inputLabel={content.inputLabel}
@@ -162,13 +174,13 @@ export function TranslatorWorkspace() {
           setErrorMessage(null)
           setCopyState('idle')
         }}
-        onSubmit={() => void translate()}
+        onSubmit={translate}
         placeholder={content.placeholder}
       />
       <TranslationOutput
         copyState={copyState}
         isReverse={mode === 'reverse'}
-        onCopy={() => void copyResult()}
+        onCopy={copyResult}
         result={result}
       />
     </VStack>

@@ -2,8 +2,12 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   BRAILLE_BLANK,
+  brailleMasksToString,
   createBrailleCell,
   deleteLastCharacter,
+  mirrorBrailleMask,
+  parseBrailleString,
+  toggleBrailleDot,
 } from './braille-editor'
 
 describe('braille editor helpers', () => {
@@ -25,5 +29,24 @@ describe('braille editor helpers', () => {
     expect(deleteLastCharacter('⠁⠉')).toBe('⠁')
     expect(deleteLastCharacter('⠁😀')).toBe('⠁')
     expect(deleteLastCharacter('')).toBe('')
+  })
+
+  test('셀 마스크를 편집하고 유니코드 점자로 변환한다', () => {
+    const dotOne = toggleBrailleDot(0, 1)
+    const dotsOneAndFour = toggleBrailleDot(dotOne, 4)
+
+    expect(brailleMasksToString([dotOne, dotsOneAndFour, 0])).toBe('⠁⠉⠀')
+  })
+
+  test('점자 문자열만 셀 마스크로 가져온다', () => {
+    expect(parseBrailleString('⠁⠉⠀')).toEqual([1, 9, 0])
+    expect(parseBrailleString('')).toEqual([])
+    expect(parseBrailleString('⠁A')).toBeNull()
+  })
+
+  test('음각 미리보기는 각 셀의 좌우 점을 맞바꾼다', () => {
+    expect(mirrorBrailleMask(0b000001)).toBe(0b001000)
+    expect(mirrorBrailleMask(0b001000)).toBe(0b000001)
+    expect(mirrorBrailleMask(0b111111)).toBe(0b111111)
   })
 })
