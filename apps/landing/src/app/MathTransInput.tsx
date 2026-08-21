@@ -110,9 +110,9 @@ export function MathTransInput({
         </VStack>
         <Text
           color="$text"
-          fontFamily="monospace"
           minH="1.5em"
           opacity={0.7}
+          typography="body"
           wordBreak="break-all"
         >
           {latex ? `LaTeX: $${latex}$` : 'LaTeX가 자동으로 생성됩니다'}
