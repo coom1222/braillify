@@ -1,0 +1,12 @@
+{
+  "changes": {
+    "libs/braillify/Cargo.toml": "Patch",
+    "packages/c/Cargo.toml": "Patch",
+    "packages/dotnet/Braillify/Braillify.csproj": "Patch",
+    "packages/dotnet/BraillifyNet/BraillifyNet.csproj": "Patch",
+    "packages/node/package.json": "Patch",
+    "packages/python/pyproject.toml": "Patch"
+  },
+  "note": "chore: update dependencies to latest",
+  "date": "2026-08-29T18:17:41.269563300Z"
+}
