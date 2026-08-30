@@ -481,17 +481,40 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: packages/node/pkg/*
+      # npm (not bun) performs the publish, and it needs `registry-url` here:
+      # that is what writes the registry line into the job's .npmrc, which is
+      # what npm exchanges the Actions OIDC token against. Without it npm has
+      # no registry to authenticate to and falls back to an anonymous PUT,
+      # which the registry answers with a 404 rather than a 401.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1. Node 24 bundles the
+      # 11.x line but not necessarily a new enough patch, so pin it explicitly
+      # rather than depending on whichever npm the runner image happens to
+      # carry.
+      - name: Ensure npm >= 11.5.1 (OIDC floor)
+        run: npm install -g 'npm@^11'
       # - name: Move artifacts
       #   run: bun run artifacts
       #   working-directory: packages/node
       # - name: List packages
       #   run: ls -R ./npm
       #   working-directory: packages/node
+      # Publishes with Trusted Publishing (OIDC): npm exchanges the job's
+      # `id-token` for a short-lived registry credential, so no NPM_TOKEN is
+      # written to .npmrc. Writing one would actually BREAK this - npm prefers
+      # an explicit `_authToken` and never starts the OIDC exchange when it
+      # finds one.
+      #
+      # This requires a trusted publisher registered for `braillify` on
+      # npmjs.com pointing at dev-five-git/braillify and this workflow file;
+      # without it the registry rejects the exchange.
       - name: Publish
         run: |
           # bun install -g @napi-rs/cli
           bun run build
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
 
           # package.json 의 현재 버전이 이미 npm 에 publish 되어 있으면 nothing to do.
           # (버전을 bump 하면 새 버전은 아직 존재하지 않으므로 정상 publish 됨)
@@ -505,7 +528,6 @@ jobs:
           npm publish --access public
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: packages/node
       # - name: Upload Asset
       #   uses: owjs3901/upload-github-release-asset@main
