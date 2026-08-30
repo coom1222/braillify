@@ -32,7 +32,7 @@
         "react-syntax-highlighter": "16.1.1",
       },
       "devDependencies": {
-        "@devup-ui/next-plugin": "^1.0.85",
+        "@devup-ui/next-plugin": "^1.0.86",
         "@types/node": "^26",
         "@types/react": "^19",
         "@types/react-dom": "^19",
@@ -92,7 +92,7 @@
 
     "@devup-ui/eslint-plugin": ["@devup-ui/eslint-plugin@1.0.19", "", { "dependencies": { "@typescript-eslint/utils": "^8.68", "typescript-eslint": "^8.68" } }, "sha512-Xu9jvbd5Dso2O+6j+rAB0Urqsj5qLsqMRRXd5hXki3EvIKW7/Fz4X+P5K9vPyqkubL5BtNG8GXY6E0M3t0j0lQ=="],
 
-    "@devup-ui/next-plugin": ["@devup-ui/next-plugin@1.0.85", "", { "dependencies": { "@devup-ui/plugin-utils": "^1.0.13", "@devup-ui/wasm": "^1.0.78", "@devup-ui/webpack-plugin": "^1.0.66" }, "peerDependencies": { "next": "*" } }, "sha512-QHw2cPdD4CoHdFjGZI/JtWrmFjOFD1BhG1QP5eMkG6wHKas+tf2dzkjaCYtJg0tD5InmPyR/S5jJ0n7DQfFmTQ=="],
+    "@devup-ui/next-plugin": ["@devup-ui/next-plugin@1.0.86", "", { "dependencies": { "@devup-ui/plugin-utils": "^1.0.13", "@devup-ui/wasm": "^1.0.78", "@devup-ui/webpack-plugin": "^1.0.66" }, "peerDependencies": { "next": "*" } }, "sha512-+r3tNuW1UVw0upkI65hcrObRPsdw1I+Kq0wiRlvQ9k27mFwsSmkk3HYP22pQdY1mypaLif9zaGRV2Gw2diHkGw=="],
 
     "@devup-ui/plugin-utils": ["@devup-ui/plugin-utils@1.0.14", "", {}, "sha512-XM/gW3K5L9DvRqdMdXLO7E6RKTTKflu2H4bRSw56nvcUP8owH2iYxd3j/D7W8774so5WPCn1QmhTf7XYfznS3w=="],
 
