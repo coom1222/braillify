@@ -140,6 +140,10 @@ struct PendingRuleReviewClusterSample {
     shard: String,
     index: usize,
     input: String,
+    expected_excerpt: String,
+    actual_excerpt: String,
+    first_difference_cell: Option<usize>,
+    error: Option<String>,
     primary_class: String,
     reason: String,
 }
@@ -149,6 +153,7 @@ struct PendingRuleReviewClusterStats {
     candidates: usize,
     exact: usize,
     mismatch: usize,
+    conflicting_reference_cases: usize,
     mismatch_primary_classes: BTreeMap<String, usize>,
     samples: BTreeMap<String, Vec<PendingRuleReviewClusterSample>>,
 }
@@ -542,6 +547,7 @@ fn is_delimiter_or_quote(ch: char) -> bool {
 
 const UPPERCASE_ROMAN_HEADWORD_EXPANSION: &str =
     "uppercase_roman_headword_closed_multiword_parenthetical";
+const STANDALONE_UPPERCASE_ROMAN_WORD: &str = "standalone_multi_character_uppercase_roman_word";
 
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
@@ -582,6 +588,42 @@ fn has_uppercase_roman_headword_expansion(input: &str) -> bool {
     false
 }
 
+/// Finds a maximal, alphanumeric-delimited ASCII letter run of two or more
+/// capitals, excluding the headword of an immediately following parenthetical
+/// expansion already covered by `UPPERCASE_ROMAN_HEADWORD_EXPANSION`.
+fn has_standalone_uppercase_roman_word(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+        }
+        let run = &input[start..cursor];
+        let previous = input[..start].chars().next_back();
+        let next = input[cursor..].chars().next();
+        let is_alphanumeric_delimited = previous.is_none_or(|ch| !ch.is_ascii_alphanumeric())
+            && next.is_none_or(|ch| !ch.is_ascii_alphanumeric());
+        if run.len() >= 2
+            && run.bytes().all(|byte| byte.is_ascii_uppercase())
+            && is_alphanumeric_delimited
+            && next != Some('(')
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn enum_key<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .expect("enum serialization must succeed")
@@ -593,15 +635,19 @@ fn enum_key<T: Serialize>(value: &T) -> String {
 fn excerpt_pair(expected: &str, actual: &str) -> (String, String) {
     let expected_chars = expected.chars().collect::<Vec<_>>();
     let actual_chars = actual.chars().collect::<Vec<_>>();
-    let first_diff = expected_chars
-        .iter()
-        .zip(&actual_chars)
-        .position(|(left, right)| left != right)
-        .unwrap_or(expected_chars.len().min(actual_chars.len()));
+    let first_diff = first_difference_cell(expected, actual);
     let start = first_diff.saturating_sub(8);
     let expected_excerpt = expected_chars.iter().skip(start).take(24).collect();
     let actual_excerpt = actual_chars.iter().skip(start).take(24).collect();
     (expected_excerpt, actual_excerpt)
+}
+
+fn first_difference_cell(expected: &str, actual: &str) -> usize {
+    expected
+        .chars()
+        .zip(actual.chars())
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| expected.chars().count().min(actual.chars().count()))
 }
 
 fn is_compatibility_unit_decomposition(ch: char, nfkc: &str) -> bool {
@@ -656,6 +702,66 @@ fn encoding_error_family(ch: char) -> &'static str {
     }
 }
 
+fn record_structural_cohort_case(
+    stats: &mut PendingRuleReviewClusterStats,
+    item: &EncodedCase,
+    primary: PrimaryClass,
+    primary_key: &str,
+    reason_key: &str,
+    sample_limit: usize,
+) {
+    stats.candidates += 1;
+    let outcome = if primary == PrimaryClass::Exact {
+        stats.exact += 1;
+        "exact"
+    } else {
+        stats.mismatch += 1;
+        if primary == PrimaryClass::CorpusSuspect {
+            stats.conflicting_reference_cases += 1;
+        }
+        *stats
+            .mismatch_primary_classes
+            .entry(primary_key.to_string())
+            .or_insert(0) += 1;
+        "mismatch"
+    };
+    let bucket = stats.samples.entry(outcome.to_string()).or_default();
+    if bucket.len() >= sample_limit
+        || bucket
+            .iter()
+            .any(|sample| sample.shard == item.located.shard)
+    {
+        return;
+    }
+
+    let expected = &item.located.case.unicode;
+    let (actual, error) = match &item.actual {
+        Ok(actual) => (actual.as_str(), None),
+        Err(error) => ("", Some(error.clone())),
+    };
+    let (expected_excerpt, actual_excerpt) = if actual == expected {
+        (
+            expected.chars().take(24).collect(),
+            actual.chars().take(24).collect(),
+        )
+    } else {
+        excerpt_pair(expected, actual)
+    };
+    let first_difference_cell =
+        (actual != expected).then(|| first_difference_cell(expected, actual));
+    bucket.push(PendingRuleReviewClusterSample {
+        shard: item.located.shard.clone(),
+        index: item.located.index,
+        input: item.located.case.input.clone(),
+        expected_excerpt,
+        actual_excerpt,
+        first_difference_cell,
+        error,
+        primary_class: primary_key.to_string(),
+        reason: reason_key.to_string(),
+    });
+}
+
 fn analyze(
     cases: Vec<LocatedCase>,
     encoded: Vec<EncodedCase>,
@@ -672,10 +778,16 @@ fn analyze(
     let mut shards = BTreeMap::<String, ShardStats>::new();
     let mut samples = BTreeMap::<String, Vec<Sample>>::new();
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
-    let mut pending_rule_review_clusters = BTreeMap::from([(
-        UPPERCASE_ROMAN_HEADWORD_EXPANSION.to_string(),
-        PendingRuleReviewClusterStats::default(),
-    )]);
+    let mut pending_rule_review_clusters = BTreeMap::from([
+        (
+            STANDALONE_UPPERCASE_ROMAN_WORD.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            UPPERCASE_ROMAN_HEADWORD_EXPANSION.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+    ]);
     let mut exact = 0usize;
 
     for item in &encoded {
@@ -711,32 +823,30 @@ fn analyze(
         *primary_classes.entry(primary_key.clone()).or_insert(0) += 1;
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
 
-        if has_uppercase_roman_headword_expansion(&item.located.case.input) {
-            let stats = pending_rule_review_clusters
-                .get_mut(UPPERCASE_ROMAN_HEADWORD_EXPANSION)
-                .expect("registered pending-rule-review cluster must exist");
-            stats.candidates += 1;
-            let outcome = if primary == PrimaryClass::Exact {
-                stats.exact += 1;
-                "exact"
-            } else {
-                stats.mismatch += 1;
-                *stats
-                    .mismatch_primary_classes
-                    .entry(primary_key.clone())
-                    .or_insert(0) += 1;
-                "mismatch"
-            };
-            let bucket = stats.samples.entry(outcome.to_string()).or_default();
-            if bucket.len() < sample_limit {
-                bucket.push(PendingRuleReviewClusterSample {
-                    shard: item.located.shard.clone(),
-                    index: item.located.index,
-                    input: item.located.case.input.clone(),
-                    primary_class: primary_key.clone(),
-                    reason: reason_key.clone(),
-                });
+        for (cluster, present) in [
+            (
+                STANDALONE_UPPERCASE_ROMAN_WORD,
+                has_standalone_uppercase_roman_word(&item.located.case.input),
+            ),
+            (
+                UPPERCASE_ROMAN_HEADWORD_EXPANSION,
+                has_uppercase_roman_headword_expansion(&item.located.case.input),
+            ),
+        ] {
+            if !present {
+                continue;
             }
+            let stats = pending_rule_review_clusters
+                .get_mut(cluster)
+                .expect("registered pending-rule-review cluster must exist");
+            record_structural_cohort_case(
+                stats,
+                item,
+                primary,
+                &primary_key,
+                &reason_key,
+                sample_limit,
+            );
         }
 
         let shard = shards.entry(item.located.shard.clone()).or_default();
@@ -934,13 +1044,19 @@ fn markdown(report: &AnalysisReport) -> String {
          character uppercase ASCII headword immediately followed by a closed parenthesis whose \
          contents are two or more ASCII Roman words separated only by spaces. Because the \
          contents admit only letters and spaces, visible operators, subscript/superscript \
-         notation, and nested parentheses are excluded deterministically.\n\n",
+         notation, and nested parentheses are excluded deterministically. The \
+         `standalone_multi_character_uppercase_roman_word` gate finds maximal ASCII-letter runs \
+         of two or more capitals with non-alphanumeric boundaries; a run immediately followed \
+         by `(` is excluded so the HCA-style headword itself is not counted by both gates.\n\n",
     );
-    text.push_str("| Cluster | Candidates | Exact | Mismatch |\n|---|---:|---:|---:|\n");
+    text.push_str(
+        "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
+         |---|---:|---:|---:|---:|\n",
+    );
     for (name, stats) in &report.pending_rule_review_clusters {
         text.push_str(&format!(
-            "| `{name}` | {} | {} | {} |\n",
-            stats.candidates, stats.exact, stats.mismatch
+            "| `{name}` | {} | {} | {} | {} |\n",
+            stats.candidates, stats.exact, stats.mismatch, stats.conflicting_reference_cases
         ));
     }
     for (name, stats) in &report.pending_rule_review_clusters {
@@ -965,7 +1081,7 @@ fn markdown(report: &AnalysisReport) -> String {
             text.push_str(&format!("\nRepresentative `{outcome}` samples:\n\n"));
             for sample in samples {
                 text.push_str(&format!(
-                    "- `{}` #{}: {}\n  - current primary/reason: `{}` / `{}`\n",
+                    "- `{}` #{}: {}\n  - expected: `{}`\n  - actual: `{}`{}{}\n  - current primary/reason: `{}` / `{}`\n",
                     sample.shard,
                     sample.index,
                     sample
@@ -974,6 +1090,15 @@ fn markdown(report: &AnalysisReport) -> String {
                         .take(180)
                         .collect::<String>()
                         .replace('`', "\\`"),
+                    sample.expected_excerpt,
+                    sample.actual_excerpt,
+                    sample
+                        .error
+                        .as_ref()
+                        .map_or_else(String::new, |error| format!("\n  - error: `{error}`")),
+                    sample.first_difference_cell.map_or_else(String::new, |cell| {
+                        format!("\n  - first differing cell (zero-based): {cell}")
+                    }),
                     sample.primary_class,
                     sample.reason
                 ));
@@ -987,8 +1112,38 @@ fn markdown(report: &AnalysisReport) -> String {
          rule 45 shows Roman-letter function notation followed by parentheses. Excluding visible \
          operators, scripts, and nesting narrows this corpus cohort, but the PDF does not make \
          the remaining surface shape sufficient to rule out every mathematical counterexample. \
-         The cluster therefore remains conservative pending-review evidence only.\n",
+         The cluster therefore remains conservative pending-review evidence only.\n\n\
+         The standalone-uppercase cohort is similarly ambiguous. Hangeul rule 28's appendix \
+         defines the capital-word indicator for two or more consecutive capitals, and rule 29 \
+         defines Roman indicators around Roman text in a Korean sentence. But math rule 12 also \
+         uses uppercase Roman variables, while science rule 7 uses uppercase runs in chemical \
+         formulas. The input gate cannot determine which semantic regime applies, so its output \
+         differences are observations to review, not permission to infer an engine rule from the \
+         corpus reference.\n\n\
+         Corpus contradictions remain a separate gate: identical inputs with conflicting \
+         references are classified as `corpus_suspect` before these cohorts are recorded and \
+         would appear explicitly in each mismatch primary-class distribution. Their absence does \
+         not prove a reference correct; it only means that this deterministic contradiction test \
+         did not fire.\n",
     );
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(STANDALONE_UPPERCASE_ROMAN_WORD)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent standalone-uppercase measurement: {} candidates, {} exact controls, {} \
+             mismatches, and {pending} members in the actual `pending_rule_review` subcluster. \
+             Its high frequency does not make it causal: the same input shape is exact in many \
+             cases, and a sentence containing the shape may first differ at another Roman, \
+             numeric, or punctuation structure. No engine change is inferred from this cohort.\n",
+            stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
 
     text.push_str("\n## Encoding-error diagnostics\n\n");
     text.push_str(
@@ -1447,6 +1602,19 @@ mod tests {
         assert_eq!(has_uppercase_roman_headword_expansion(input), expected);
     }
 
+    #[rstest::rstest]
+    #[case::standalone("새로운 DRX 브랜드", true)]
+    #[case::inside_parentheses("엠디(MD), SNS", true)]
+    #[case::expansion_headword("HCA(Home Connectivity Alliance)", false)]
+    #[case::single_capital("점 A가 있다", false)]
+    #[case::mixed_case("SmartThings Hub", false)]
+    #[case::alphanumeric("O4O 시스템", false)]
+    #[case::chemical_formula("PETCO2이다", false)]
+    #[case::lowercase("web service", false)]
+    fn detects_standalone_uppercase_roman_word(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(has_standalone_uppercase_roman_word(input), expected);
+    }
+
     #[test]
     fn aggregates_headword_expansion_outcomes_without_reclassification() {
         let cases = [
@@ -1483,7 +1651,11 @@ mod tests {
             .unwrap();
 
         assert_eq!((stats.candidates, stats.exact, stats.mismatch), (2, 1, 1));
+        assert_eq!(stats.conflicting_reference_cases, 0);
         assert_eq!(stats.mismatch_primary_classes["pending_rule_review"], 1);
+        assert_eq!(stats.samples["mismatch"][0].expected_excerpt, "expected");
+        assert_eq!(stats.samples["mismatch"][0].actual_excerpt, "actual");
+        assert_eq!(stats.samples["mismatch"][0].first_difference_cell, Some(0));
         assert_eq!(report.primary_classes["exact"], 1);
         assert_eq!(report.primary_classes["pending_rule_review"], 1);
     }
