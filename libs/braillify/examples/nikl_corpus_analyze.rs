@@ -549,6 +549,8 @@ const UPPERCASE_ROMAN_HEADWORD_EXPANSION: &str =
     "uppercase_roman_headword_closed_multiword_parenthetical";
 const STANDALONE_UPPERCASE_ROMAN_WORD: &str = "standalone_multi_character_uppercase_roman_word";
 const KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL: &str = "korean_prefixed_closed_allcaps_parenthetical";
+const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
+    "multi_character_allcaps_roman_runs_joined_by_middle_dot";
 
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
@@ -647,6 +649,44 @@ fn has_korean_prefixed_allcaps_parenthetical(input: &str) -> bool {
         };
         let body = &tail[..close];
         if body.len() >= 2 && body.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Cross-cutting input-only shape such as `AI·SW`: two maximal ASCII-letter
+/// runs of at least two capitals joined directly by U+00B7 MIDDLE DOT.
+///
+/// This deliberately does not assign prose, mathematics, or science
+/// semantics. The 2024 rules use the same character as Korean punctuation
+/// and as a multiplication mark, so the shape remains an analyzer cohort.
+fn has_allcaps_roman_middle_dot_runs(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    for (middle_dot, _) in input.match_indices('·') {
+        let mut left_start = middle_dot;
+        while left_start > 0 && bytes[left_start - 1].is_ascii_alphabetic() {
+            left_start -= 1;
+        }
+
+        let right_start = middle_dot + '·'.len_utf8();
+        let mut right_end = right_start;
+        while right_end < bytes.len() && bytes[right_end].is_ascii_alphabetic() {
+            right_end += 1;
+        }
+
+        let left = &input[left_start..middle_dot];
+        let right = &input[right_start..right_end];
+        let previous = input[..left_start].chars().next_back();
+        let next = input[right_end..].chars().next();
+        let has_alphanumeric_boundaries = previous.is_none_or(|ch| !ch.is_ascii_alphanumeric())
+            && next.is_none_or(|ch| !ch.is_ascii_alphanumeric());
+        if left.len() >= 2
+            && right.len() >= 2
+            && left.bytes().all(|byte| byte.is_ascii_uppercase())
+            && right.bytes().all(|byte| byte.is_ascii_uppercase())
+            && has_alphanumeric_boundaries
+        {
             return true;
         }
     }
@@ -809,6 +849,10 @@ fn analyze(
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
     let mut pending_rule_review_clusters = BTreeMap::from([
         (
+            ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -857,6 +901,10 @@ fn analyze(
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
 
         for (cluster, present) in [
+            (
+                ALLCAPS_ROMAN_MIDDLE_DOT_RUNS,
+                has_allcaps_roman_middle_dot_runs(&item.located.case.input),
+            ),
             (
                 KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
                 has_korean_prefixed_allcaps_parenthetical(&item.located.case.input),
@@ -1088,7 +1136,11 @@ fn markdown(report: &AnalysisReport) -> String {
          `korean_prefixed_closed_allcaps_parenthetical` gate requires an immediately preceding \
          Korean character and a closed body of two or more uppercase ASCII letters. It \
          intentionally contains both acronym annotations (`책임자(COO)`) and scientific \
-         formulae (`일산화탄소(CO)`) so their semantic collision remains measurable.\n\n",
+         formulae (`일산화탄소(CO)`) so their semantic collision remains measurable. The \
+         `multi_character_allcaps_roman_runs_joined_by_middle_dot` gate requires two maximal \
+         ASCII-letter runs of at least two capitals joined directly by U+00B7, with \
+         non-alphanumeric outer boundaries. It records shapes such as `AI·SW` without assigning \
+         prose, mathematics, or science semantics.\n\n",
     );
     text.push_str(
         "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
@@ -1167,6 +1219,16 @@ fn markdown(report: &AnalysisReport) -> String {
          meanings can have the same input surface form. The observed `COO`/`NSC`/`MOU` output \
          differences therefore do not justify disabling either algorithm without independent \
          semantic evidence.\n\n\
+         The all-caps Roman middle-dot cohort is also semantically underdetermined. Hangeul rule \
+         29 defines Roman indicators around Roman text in a Korean sentence, and Hangeul rule 50 \
+         requires U+00B7 to be attached on both sides, but neither rule says that the punctuation \
+         joins the adjacent Roman runs into one Roman span. Math rule 2 separately defines the \
+         same printed dot as multiplication, and science rule 4 uses it inside chemical \
+         formulae. An input-only `AI·SW` gate therefore cannot prove which mode transition is \
+         required. Exact cases remain controls, mismatches retain their existing primary class, \
+         and no engine rule is inferred from their references. Representative samples are \
+         sentence-level evidence: when the reported first difference precedes the detected \
+         middle-dot span, the cohort must not be treated as the cause of that mismatch.\n\n\
          Corpus contradictions remain a separate gate: identical inputs with conflicting \
          references are classified as `corpus_suspect` before these cohorts are recorded and \
          would appear explicitly in each mismatch primary-class distribution. Their absence does \
@@ -1205,6 +1267,23 @@ fn markdown(report: &AnalysisReport) -> String {
              exact controls, {} mismatches, and {pending} members in the actual \
              `pending_rule_review` subcluster. This is a semantic-collision audit, not an engine \
              routing rule; no implementation change is inferred from its reference outputs.\n",
+            stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ALLCAPS_ROMAN_MIDDLE_DOT_RUNS)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent all-caps Roman middle-dot measurement: {} candidates, {} exact controls, \
+             {} mismatches, and {pending} members in the actual `pending_rule_review` subcluster. \
+             This cross-cutting cohort preserves every primary class and is not an engine routing \
+             rule.\n",
             stats.candidates, stats.exact, stats.mismatch
         ));
     }
@@ -1690,6 +1769,19 @@ mod tests {
     #[case::unclosed("책임자(COO", false)]
     fn detects_korean_prefixed_allcaps_parenthetical(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_korean_prefixed_allcaps_parenthetical(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::embedded_in_korean("AI·SW교육", true)]
+    #[case::standalone("DRX·SNS", true)]
+    #[case::lowercase("a·b", false)]
+    #[case::single_letters("A·B", false)]
+    #[case::korean("가·나", false)]
+    #[case::numeric("3·1 운동", false)]
+    #[case::space_separated("AI · SW", false)]
+    #[case::alphanumeric_boundary("1AI·SW2", false)]
+    fn detects_allcaps_roman_middle_dot_runs(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(has_allcaps_roman_middle_dot_runs(input), expected);
     }
 
     #[test]
