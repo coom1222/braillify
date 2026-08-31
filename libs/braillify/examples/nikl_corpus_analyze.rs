@@ -4,7 +4,8 @@
 //! `cargo run --release -p braillify --example nikl_corpus_analyze`
 //!
 //! This is an offline evaluation tool. It deliberately deserializes only `input` and
-//! `unicode`; the read-only competitor `world` field is neither loaded nor compared.
+//! `unicode`; the read-only competitor fields `world` and `jeomsarang` are neither loaded nor
+//! compared.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -156,8 +157,15 @@ struct PendingRuleReviewClusterStats {
     conflicting_reference_cases: usize,
     output_signature_mismatches_evaluated: usize,
     first_difference_in_output_signature: usize,
+    first_difference_in_output_signature_transitions: BTreeMap<String, usize>,
     mismatch_primary_classes: BTreeMap<String, usize>,
     samples: BTreeMap<String, Vec<PendingRuleReviewClusterSample>>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct FirstDifferenceTransitionStats {
+    cases: usize,
+    samples: Vec<PendingRuleReviewClusterSample>,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,6 +187,7 @@ struct AnalysisReport {
     // Cross-cutting input cohorts; only members whose existing primary class
     // is PendingRuleReview are pending-rule-review subclusters.
     pending_rule_review_clusters: BTreeMap<String, PendingRuleReviewClusterStats>,
+    pending_first_difference_cell_transitions: BTreeMap<String, FirstDifferenceTransitionStats>,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -556,6 +565,87 @@ const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
+const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AllcapsRomanRun {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+/// Finds maximal all-caps ASCII runs containing the adjacent letters `OU`.
+///
+/// This is an input gate for a pronunciation-sensitive UEB diagnostic, not a
+/// claim that the run is an initialism. Alphanumeric outer boundaries exclude
+/// fragments of identifiers while retaining parenthesized and standalone runs.
+fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<AllcapsRomanRun> {
+    let bytes = input.as_bytes();
+    let mut runs = Vec::new();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start_byte = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+        }
+        let end_byte = cursor;
+        let run = &input[start_byte..end_byte];
+        let previous = input[..start_byte].chars().next_back();
+        let next = input[end_byte..].chars().next();
+        if run.len() >= 2
+            && run.bytes().all(|byte| byte.is_ascii_uppercase())
+            && run.as_bytes().windows(2).any(|pair| pair == b"OU")
+            && previous.is_none_or(|ch| !ch.is_ascii_alphanumeric())
+            && next.is_none_or(|ch| !ch.is_ascii_alphanumeric())
+        {
+            runs.push(AllcapsRomanRun {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    runs
+}
+
+/// Locates each detected run in the full current-engine output by searching
+/// for that run's independently encoded signature. This uses neither the
+/// corpus reference nor a hard-coded braille value.
+fn allcaps_ou_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = BTreeSet::new();
+    for candidate in allcaps_roman_runs_containing_ou(input) {
+        let run = &input[candidate.start_byte..candidate.end_byte];
+        let Ok(signature) = braillify::encode_to_unicode(run) else {
+            continue;
+        };
+        let signature_cells = signature.chars().count();
+        for (start_byte, _) in actual.match_indices(&signature) {
+            let start = actual[..start_byte].chars().count();
+            ranges.insert((start, start + signature_cells));
+        }
+    }
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+fn first_difference_in_allcaps_ou_run(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    allcaps_ou_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
 
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
@@ -867,6 +957,56 @@ fn first_difference_cell(expected: &str, actual: &str) -> usize {
         .unwrap_or_else(|| expected.chars().count().min(actual.chars().count()))
 }
 
+fn cell_transition_key(expected: &str, actual: &str, index: usize) -> String {
+    let label = |text: &str| {
+        text.chars().nth(index).map_or_else(
+            || "<end>".to_string(),
+            |cell| format!("U+{:04X} {cell}", cell as u32),
+        )
+    };
+    format!("{} -> {}", label(expected), label(actual))
+}
+
+fn record_pending_first_difference_transition(
+    transitions: &mut BTreeMap<String, FirstDifferenceTransitionStats>,
+    item: &EncodedCase,
+    primary_key: &str,
+    reason_key: &str,
+    sample_limit: usize,
+) {
+    let Ok(actual) = &item.actual else {
+        return;
+    };
+    let expected = &item.located.case.unicode;
+    if actual == expected {
+        return;
+    }
+    let first_difference = first_difference_cell(expected, actual);
+    let key = cell_transition_key(expected, actual, first_difference);
+    let stats = transitions.entry(key).or_default();
+    stats.cases += 1;
+    if stats.samples.len() >= sample_limit
+        || stats
+            .samples
+            .iter()
+            .any(|sample| sample.shard == item.located.shard)
+    {
+        return;
+    }
+    let (expected_excerpt, actual_excerpt) = excerpt_pair(expected, actual);
+    stats.samples.push(PendingRuleReviewClusterSample {
+        shard: item.located.shard.clone(),
+        index: item.located.index,
+        input: item.located.case.input.clone(),
+        expected_excerpt,
+        actual_excerpt,
+        first_difference_cell: Some(first_difference),
+        error: None,
+        primary_class: primary_key.to_string(),
+        reason: reason_key.to_string(),
+    });
+}
+
 fn is_compatibility_unit_decomposition(ch: char, nfkc: &str) -> bool {
     matches!(
         ch as u32,
@@ -937,6 +1077,14 @@ fn record_structural_cohort_case(
         if let Some(is_in_signature) = first_difference_in_output_signature {
             stats.output_signature_mismatches_evaluated += 1;
             stats.first_difference_in_output_signature += usize::from(is_in_signature);
+            if is_in_signature && let Ok(actual) = &item.actual {
+                let expected = &item.located.case.unicode;
+                let first_difference = first_difference_cell(expected, actual);
+                *stats
+                    .first_difference_in_output_signature_transitions
+                    .entry(cell_transition_key(expected, actual, first_difference))
+                    .or_insert(0) += 1;
+            }
         }
         if primary == PrimaryClass::CorpusSuspect {
             stats.conflicting_reference_cases += 1;
@@ -1002,6 +1150,10 @@ fn analyze(
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
     let mut pending_rule_review_clusters = BTreeMap::from([
         (
+            ALLCAPS_ROMAN_RUN_CONTAINING_OU.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1026,6 +1178,7 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
     ]);
+    let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut exact = 0usize;
 
     for item in &encoded {
@@ -1061,7 +1214,22 @@ fn analyze(
         *primary_classes.entry(primary_key.clone()).or_insert(0) += 1;
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
 
+        if primary == PrimaryClass::PendingRuleReview {
+            record_pending_first_difference_transition(
+                &mut pending_first_difference_cell_transitions,
+                item,
+                &primary_key,
+                &reason_key,
+                sample_limit,
+            );
+        }
+
         for (cluster, present, localized_first_difference) in [
+            (
+                ALLCAPS_ROMAN_RUN_CONTAINING_OU,
+                !allcaps_roman_runs_containing_ou(&item.located.case.input).is_empty(),
+                Some(first_difference_in_allcaps_ou_run(item)),
+            ),
             (
                 ALLCAPS_ROMAN_MIDDLE_DOT_RUNS,
                 has_allcaps_roman_middle_dot_runs(&item.located.case.input),
@@ -1240,6 +1408,7 @@ fn analyze(
         encoding_error_audit,
         rule_36_transition_audit,
         pending_rule_review_clusters,
+        pending_first_difference_cell_transitions,
         overlapping_traits: traits,
         shards,
         samples,
@@ -1251,7 +1420,8 @@ fn markdown(report: &AnalysisReport) -> String {
     text.push_str("# NIKL 2025 v1.0 corpus analysis\n\n");
     text.push_str(
         "> Generated by `cargo run --release -p braillify --example nikl_corpus_analyze`. \
-         The tool reads only `input` and `unicode`; it never loads or compares `world`.\n\n",
+         The tool reads only `input` and `unicode`; it never loads or compares the read-only \
+         `world` or `jeomsarang` fields.\n\n",
     );
     text.push_str("## Current measurement\n\n");
     text.push_str("| Metric | Count |\n|---|---:|\n");
@@ -1294,6 +1464,54 @@ fn markdown(report: &AnalysisReport) -> String {
         text.push_str(&format!("| `{name}` | {count} |\n"));
     }
 
+    text.push_str("\n## Pending first-difference cell transitions\n\n");
+    text.push_str(
+        "This ranking is a diagnostic selector, not an implementation rule. It counts only \
+         current `pending_rule_review` cases whose encoder call succeeded, keyed by the expected \
+         and actual cell at the sentence's first differing position. Candidate implementation \
+         work must still bind a transition to a localized input structure, exact controls, and \
+         independent PDF evidence.\n\n",
+    );
+    let mut ranked_transitions = report
+        .pending_first_difference_cell_transitions
+        .iter()
+        .collect::<Vec<_>>();
+    ranked_transitions.sort_by(|(left_key, left), (right_key, right)| {
+        right
+            .cases
+            .cmp(&left.cases)
+            .then_with(|| left_key.cmp(right_key))
+    });
+    text.push_str("| Rank | Expected → actual first cell | Cases |\n|---:|---|---:|\n");
+    for (rank, (transition, stats)) in ranked_transitions.iter().take(20).enumerate() {
+        text.push_str(&format!(
+            "| {} | `{transition}` | {} |\n",
+            rank + 1,
+            stats.cases
+        ));
+    }
+    for (transition, stats) in ranked_transitions.iter().take(10) {
+        text.push_str(&format!("\n### `{transition}`\n\n"));
+        for sample in &stats.samples {
+            text.push_str(&format!(
+                "- `{}` #{}: {}\n  - expected: `{}`\n  - actual: `{}`\n  - first differing cell (zero-based): {}\n  - current primary/reason: `{}` / `{}`\n",
+                sample.shard,
+                sample.index,
+                sample
+                    .input
+                    .chars()
+                    .take(180)
+                    .collect::<String>()
+                    .replace('`', "\\`"),
+                sample.expected_excerpt,
+                sample.actual_excerpt,
+                sample.first_difference_cell.unwrap_or(0),
+                sample.primary_class,
+                sample.reason
+            ));
+        }
+    }
+
     text.push_str("\n## Cross-cutting input-only structural cohorts\n\n");
     text.push_str(
         "These are cross-cutting input-only structural cohorts, not new primary classes and not \
@@ -1321,7 +1539,10 @@ fn markdown(report: &AnalysisReport) -> String {
          `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
          traits, it also locates the current engine's emitted structure and counts a mismatch as \
          signature-local only when the sentence's first differing cell falls inside that output \
-         range. The `tight_triangle_mark_immediately_before_korean` gate requires literal \
+         range. The `allcaps_roman_run_containing_ou` gate finds maximal, alphanumeric-delimited \
+         uppercase ASCII runs containing adjacent `OU`. It locates the independently encoded run \
+         signature in the complete current output and counts only first differences inside that \
+         signature as localized. The `tight_triangle_mark_immediately_before_korean` gate requires literal \
          `△한글` with no input space and includes the first following Korean cell in its localized \
          output range, so an observed missing-space difference is measured at the mark boundary.\n\n",
     );
@@ -1357,6 +1578,23 @@ fn markdown(report: &AnalysisReport) -> String {
                 stats.output_signature_mismatches_evaluated,
                 stats.first_difference_in_output_signature
             ));
+            if !stats
+                .first_difference_in_output_signature_transitions
+                .is_empty()
+            {
+                let mut transitions = stats
+                    .first_difference_in_output_signature_transitions
+                    .iter()
+                    .collect::<Vec<_>>();
+                transitions.sort_by(|(left_key, left), (right_key, right)| {
+                    right.cmp(left).then_with(|| left_key.cmp(right_key))
+                });
+                text.push_str("Localized first-difference transitions:\n\n");
+                for (transition, count) in transitions.into_iter().take(5) {
+                    text.push_str(&format!("- `{transition}`: {count}\n"));
+                }
+                text.push('\n');
+            }
         }
         text.push_str("Mismatch primary-class distribution:\n\n");
         for (primary, count) in &stats.mismatch_primary_classes {
@@ -1411,6 +1649,19 @@ fn markdown(report: &AnalysisReport) -> String {
          meanings can have the same input surface form. The observed `COO`/`NSC`/`MOU` output \
          differences therefore do not justify disabling either algorithm without independent \
          semantic evidence.\n\n\
+         The all-caps `OU` cohort isolates a frequent output transition without treating the \
+         reference as a rule. Hangeul rules 28, 29, and 32 delegate Roman-letter content to UEB \
+         (2024 Korean-rules PDF p.25 and following rules). \
+         UEB 10.12.1 says not to use a contraction when it is known or can be determined that an \
+         abbreviation or acronym's letters are pronounced separately, but says to use the \
+         contraction when that pronunciation is in doubt; UEB 10.12.2 otherwise uses \
+         contractions in abbreviations and acronyms (UEB 2024 PDF pp.191-192; Korean UEB \
+         translation PDF pp.182-183). Thus an expected `o` + `u` versus the \
+         current `ou` groupsign can be localized to an uppercase run, yet the surface run alone \
+         cannot distinguish a letter-by-letter initialism from a pronounceable word or acronym. \
+         That distinction needs lexical or semantic evidence absent from this input gate. Exact \
+         members are controls, identical-input conflicting references remain `corpus_suspect`, \
+         and no engine change is inferred.\n\n\
          The all-caps Roman middle-dot cohort is also semantically underdetermined. Hangeul rule \
          29 defines Roman indicators around Roman text in a Korean sentence, and Hangeul rule 50 \
          requires U+00B7 to be attached on both sides, but neither rule says that the punctuation \
@@ -1446,6 +1697,28 @@ fn markdown(report: &AnalysisReport) -> String {
          not prove a reference correct; it only means that this deterministic contradiction test \
          did not fire.\n",
     );
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ALLCAPS_ROMAN_RUN_CONTAINING_OU)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent all-caps `OU` measurement: {} candidates, {} exact controls, {} \
+             mismatches, {pending} members in the actual `pending_rule_review` subcluster, and \
+             {}/{} evaluable mismatches whose first difference is inside the current-engine \
+             output signature for the detected run. This is a pronunciation-sensitive UEB \
+             review cohort, not an engine routing rule.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
     if let Some(stats) = report
         .pending_rule_review_clusters
         .get(STANDALONE_UPPERCASE_ROMAN_WORD)
@@ -1989,6 +2262,19 @@ mod tests {
         assert_eq!(normalized_braille_whitespace("⠁ ⠃"), "⠁⠀⠃");
     }
 
+    #[rstest::rstest]
+    #[case::different_cells("⠁", "⠃", 0, "U+2801 ⠁ -> U+2803 ⠃")]
+    #[case::expected_ended("", "⠃", 0, "<end> -> U+2803 ⠃")]
+    #[case::actual_ended("⠁", "", 0, "U+2801 ⠁ -> <end>")]
+    fn formats_first_difference_transition_key(
+        #[case] expected: &str,
+        #[case] actual: &str,
+        #[case] index: usize,
+        #[case] transition: &str,
+    ) {
+        assert_eq!(cell_transition_key(expected, actual, index), transition);
+    }
+
     #[test]
     fn roman_indicator_moves_before_capital_word_indicator() {
         assert_eq!(roman_before_capital_order("⠠⠠⠴⠁⠃"), "⠴⠠⠠⠁⠃");
@@ -2005,6 +2291,34 @@ mod tests {
     #[case::nested_parenthetical("AB(C (D E))", false)]
     fn detects_uppercase_roman_headword_expansion(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_uppercase_roman_headword_expansion(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::parenthesized_initialism("업무협약(MOU)을", vec!["MOU"])]
+    #[case::standalone_word("SOUTH KOREA", vec!["SOUTH"])]
+    #[case::multiple_runs("MOU와 YOUTH", vec!["MOU", "YOUTH"])]
+    #[case::lowercase("Mou", vec![])]
+    #[case::mixed_case("MoU", vec![])]
+    #[case::no_ou("WHO", vec![])]
+    #[case::digit_boundary("1MOU", vec![])]
+    #[case::identifier_suffix("MOU2", vec![])]
+    fn detects_allcaps_roman_runs_containing_ou(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let actual = allcaps_roman_runs_containing_ou(input)
+            .into_iter()
+            .map(|run| &input[run.start_byte..run.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_allcaps_ou_signature_in_complete_output() {
+        let input = "업무협약(MOU)을 체결했다.";
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = allcaps_ou_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
     }
 
     #[rstest::rstest]
