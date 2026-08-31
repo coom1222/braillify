@@ -572,6 +572,8 @@ const KOREAN_PREFIXED_CLOSED_ROMAN_ANNOTATION: &str =
     "korean_prefixed_closed_roman_annotation_rule_34_order";
 const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
     "multi_character_allcaps_roman_runs_joined_by_middle_dot";
+const ROMAN_RUN_BEFORE_MIDDLE_DOT_BOUNDARY: &str =
+    "roman_run_immediately_before_attached_middle_dot_boundary";
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
@@ -1147,6 +1149,7 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
         || first_difference_in_korean_prefixed_annotation_opening(item)
         || first_difference_in_inline_parenthesized_operator(item)
         || first_difference_in_tight_triangle(item)
+        || first_difference_at_roman_middle_dot_boundary(item)
         || first_difference_in_signature_spans(
             item,
             &single_capital_parenthesized_digit_spans(&item.located.case.input),
@@ -1338,6 +1341,58 @@ fn has_allcaps_roman_middle_dot_runs(input: &str) -> bool {
         }
     }
     false
+}
+
+/// Finds an ASCII-letter run followed immediately by U+00B7 and either the
+/// first following Korean character or the complete following ASCII-letter
+/// run. The span is syntactic only: it does not infer punctuation, product-name,
+/// or mathematical semantics from the middle dot.
+fn roman_run_before_middle_dot_boundary_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    for (middle_dot, mark) in input.match_indices('·') {
+        let mut left_start = middle_dot;
+        while left_start > 0 && bytes[left_start - 1].is_ascii_alphabetic() {
+            left_start -= 1;
+        }
+        if left_start == middle_dot
+            || input[..left_start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+
+        let right_start = middle_dot + mark.len();
+        let Some(first_right) = input[right_start..].chars().next() else {
+            continue;
+        };
+        let right_end = if first_right.is_ascii_alphabetic() {
+            let mut end = right_start;
+            while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+                end += 1;
+            }
+            end
+        } else if is_korean_script(first_right) {
+            right_start + first_right.len_utf8()
+        } else {
+            continue;
+        };
+        spans.push(InputSpan {
+            start_byte: left_start,
+            end_byte: right_end,
+        });
+    }
+    spans
+}
+
+fn first_difference_at_roman_middle_dot_boundary(item: &EncodedCase) -> bool {
+    first_difference_in_korean_context_signature_spans(
+        item,
+        &roman_run_before_middle_dot_boundary_spans(&item.located.case.input),
+        0,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1716,6 +1771,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ROMAN_RUN_BEFORE_MIDDLE_DOT_BOUNDARY.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1844,6 +1903,12 @@ fn analyze(
                 has_allcaps_roman_middle_dot_runs(&item.located.case.input),
                 None,
                 false,
+            ),
+            (
+                ROMAN_RUN_BEFORE_MIDDLE_DOT_BOUNDARY,
+                !roman_run_before_middle_dot_boundary_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_at_roman_middle_dot_boundary(item)),
+                true,
             ),
             (
                 KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
@@ -2274,6 +2339,12 @@ fn markdown(report: &AnalysisReport) -> String {
          ASCII-letter runs of at least two capitals joined directly by U+00B7, with \
          non-alphanumeric outer boundaries. It records shapes such as `AI·SW` without assigning \
          prose, mathematics, or science semantics. The \
+         `roman_run_immediately_before_attached_middle_dot_boundary` gate is output-localized: \
+         it requires a maximal ASCII-letter run immediately before U+00B7 and an attached \
+         Korean character or ASCII-letter run after it, then searches for that whole \
+         current-engine signature in the actual output. It therefore isolates the Roman \
+         terminator boundary without treating unrelated middle dots elsewhere in the sentence \
+         as causal. The \
          `korean_inline_parenthesized_single_arithmetic_operator` gate requires an immediate \
          `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
          traits, it also locates the current engine's emitted structure and counts a mismatch as \
@@ -2443,6 +2514,14 @@ fn markdown(report: &AnalysisReport) -> String {
          and no engine rule is inferred from their references. Representative samples are \
          sentence-level evidence: when the reported first difference precedes the detected \
          middle-dot span, the cohort must not be treated as the cause of that mismatch.\n\n\
+         The narrower Roman-before-middle-dot boundary cohort separates that semantic question \
+         from a checkable indicator boundary. Hangeul rule 29 requires a Roman terminator after \
+         Roman text. Rule 33 enumerates the punctuation that suppresses or moves that terminator, \
+         but does not include U+00B7; rule 50 requires the middle dot to be attached on both sides \
+         and does not state a Roman-terminator exception. Thus a localized reference that omits \
+         the terminator conflicts with the current rule-29/33 path on the available PDF text. \
+         This is conservative corpus/PDF-reference review evidence, not permission to remove the \
+         terminator or to reclassify non-localized cases.\n\n\
          The inline parenthesized-operator cohort has an independently checkable spacing boundary. \
          Hangeul rule 46 inserts spaces only when an operation or comparison sign is between \
          Korean text, while the literal parentheses intervene in this gate. Hangeul rule 49 says \
@@ -2757,6 +2836,29 @@ fn markdown(report: &AnalysisReport) -> String {
              This cross-cutting cohort preserves every primary class and is not an engine routing \
              rule.\n",
             stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ROMAN_RUN_BEFORE_MIDDLE_DOT_BOUNDARY)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent Roman-before-middle-dot boundary measurement: {} candidates, {} exact \
+             controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
+             subcluster, and {}/{} evaluable mismatches whose first difference is localized to \
+             the attached Roman/middle-dot output signature. Rules 29, 33, and 50 support the \
+             current terminator path but do not support the localized reference omission; no \
+             engine change or primary-class rewrite is inferred.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
         ));
     }
     if let Some(stats) = report
@@ -3595,6 +3697,42 @@ mod tests {
     #[case::alphanumeric_boundary("1AI·SW2", false)]
     fn detects_allcaps_roman_middle_dot_runs(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_allcaps_roman_middle_dot_runs(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::roman_korean("신작 PC·모바일", vec!["PC·모"])]
+    #[case::roman_roman("AI·SW교육", vec!["AI·SW"])]
+    #[case::mixed_case("기관(Fed·연준)", vec!["Fed·연"])]
+    #[case::korean_only("온·오프라인", vec![])]
+    #[case::numeric("3·1 운동", vec![])]
+    #[case::spaced("AI · SW", vec![])]
+    fn detects_roman_run_before_middle_dot_boundary(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_run_before_middle_dot_boundary_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::roman_korean("신작 PC·모바일")]
+    #[case::roman_roman("AI·SW교육")]
+    #[case::mixed_case("기관(Fed·연준)")]
+    fn localizes_roman_middle_dot_boundary_in_complete_output(#[case] input: &str) {
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = korean_context_signature_ranges(
+            input,
+            &actual,
+            &roman_run_before_middle_dot_boundary_spans(input),
+            0,
+        );
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
     }
 
     #[rstest::rstest]
