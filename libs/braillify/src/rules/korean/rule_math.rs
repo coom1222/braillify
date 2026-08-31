@@ -73,7 +73,14 @@ impl BrailleRule for RuleMath {
             }
         };
 
-        let pad_spaces = prev_has_korean && next_korean_is_non_josa;
+        // PDF 한글 제49항 — 문장 부호의 띄어쓰기는 묵자를 따른다.
+        // `한글(+)한글`처럼 연산 기호가 소괄호에 직접 둘러싸인 경우 기호는
+        // 한글 사이에 직접 놓인 것이 아니므로 제46항의 양옆 공백을 삽입하지 않는다.
+        // 과학 제21항의 `(-)`·`(+)` 예제도 괄호 안을 붙여 적는다.
+        let immediately_parenthesized = ctx.index > 0
+            && ctx.word_chars.get(ctx.index - 1) == Some(&'(')
+            && ctx.word_chars.get(ctx.index + 1) == Some(&')');
+        let pad_spaces = prev_has_korean && next_korean_is_non_josa && !immediately_parenthesized;
 
         if pad_spaces {
             ctx.emit(0);
@@ -119,5 +126,60 @@ mod tests {
         assert!(matches!(outcome, RuleResult::Consumed));
         assert!(owned.result.starts_with(&[0]));
         assert!(owned.result.ends_with(&[0]));
+    }
+
+    #[rstest::rstest]
+    #[case::plus('+')]
+    #[case::times('×')]
+    #[case::division('÷')]
+    #[case::equals('=')]
+    fn parenthesized_math_symbol_does_not_gain_inner_spaces(#[case] operator: char) {
+        let input = format!("가({operator})나");
+        let mut owned = crate::test_helpers::CtxOwned::for_text(&input, false);
+        let mut ctx = owned.ctx_at(2);
+
+        let outcome = RuleMath.apply(&mut ctx).expect("math rule should apply");
+
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert!(!owned.result.is_empty());
+        assert_ne!(owned.result.first(), Some(&0));
+        assert_ne!(owned.result.last(), Some(&0));
+    }
+
+    #[rstest::rstest]
+    #[case::plus_math_symbol("양", "+", "극")]
+    #[case::ascii_hyphen_minus_symbol("음", "-", "극")]
+    fn full_encoder_preserves_tight_parenthesized_operator(
+        #[case] left: &str,
+        #[case] operator: &str,
+        #[case] right: &str,
+    ) {
+        let input = format!("{left}({operator}){right}");
+        let expected = [left, &format!("({operator})"), right]
+            .into_iter()
+            .map(|part| crate::encode_to_unicode(part).expect("component must encode"))
+            .collect::<Vec<_>>()
+            .concat();
+
+        assert_eq!(
+            crate::encode_to_unicode(&input).expect("full input must encode"),
+            expected
+        );
+    }
+
+    #[test]
+    fn ascii_hyphen_minus_is_supported_by_punctuation_rule_49_path() {
+        assert!(matches!(
+            crate::char_struct::CharType::new('-').expect("hyphen-minus must classify"),
+            crate::char_struct::CharType::Symbol('-')
+        ));
+        assert_eq!(
+            crate::encode_to_unicode("음(-)극").expect("full input must encode"),
+            ["음", "(-)", "극"]
+                .into_iter()
+                .map(|part| crate::encode_to_unicode(part).expect("component must encode"))
+                .collect::<Vec<_>>()
+                .concat()
+        );
     }
 }

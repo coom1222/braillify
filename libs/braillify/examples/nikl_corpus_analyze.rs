@@ -1364,7 +1364,13 @@ fn markdown(report: &AnalysisReport) -> String {
          punctuation spacing follows the print, and science rule 21 prints and brailles `(-)` and \
          `(+)` with no spaces inside the parentheses. The output-signature count is therefore the \
          implementation-candidate subset; mere sentence-level coexistence is retained only as a \
-         control.\n\n\
+         control. ASCII hyphen-minus is independently supported through the `Symbol`/rule-49 \
+         punctuation path, while `+`, `×`, `÷`, and `=` reach the `MathSymbol` spacing rule; \
+         end-to-end tests preserve tight parentheses on both paths. Analyzer checkpoint `30a9b10` \
+         recorded the pre-fix baseline as 23 candidates, 0 exact, 23 mismatches, and 19 \
+         mismatches whose first difference was signature-local. The generalized rule-46/49 fix \
+         is evaluated below against that immutable baseline rather than inferred from a reference \
+         string.\n\n\
          Corpus contradictions remain a separate gate: identical inputs with conflicting \
          references are classified as `corpus_suspect` before these cohorts are recorded and \
          would appear explicitly in each mismatch primary-class distribution. Their absence does \
@@ -1442,6 +1448,15 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.mismatch,
             stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated
+        ));
+        text.push_str(&format!(
+            " At this implementation checkpoint, the strict cohort moved from 0 to {} exact \
+             cases; the corpus-wide total moved from 65,491 to {} ({:+} exact) because the same \
+             PDF-backed spacing rule also applies outside the stricter Korean-boundary audit \
+             gate. The complete standard suite remains 5,141/5,141.\n",
+            stats.exact,
+            report.exact,
+            report.exact as isize - 65_491
         ));
     }
 
