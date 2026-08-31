@@ -256,6 +256,29 @@ fn normalize_math_alphanumeric_string(text: &str) -> Cow<'_, str> {
     Cow::Owned(text.chars().map(normalize_math_alphanumeric_char).collect())
 }
 
+fn may_normalize_roman_numeral_presentation(c: char) -> bool {
+    (0x2160..=0x217f).contains(&(c as u32))
+}
+
+/// Korean Braille rule 36 transcribes a Roman numeral with its corresponding
+/// Roman letters. Unicode U+2160–U+217F are presentation forms whose NFKC
+/// decomposition is exactly that Roman-letter spelling (`Ⅱ` → `II`). Normalize
+/// only this block; the existing rule-36 token logic remains responsible for
+/// numeral validity, case indicators, context, and Roman termination.
+fn normalize_roman_numeral_presentation<'a>(text: Cow<'a, str>) -> Cow<'a, str> {
+    use unicode_normalization::UnicodeNormalization;
+
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if may_normalize_roman_numeral_presentation(ch) {
+            out.extend(std::iter::once(ch).nfkc());
+        } else {
+            out.push(ch);
+        }
+    }
+    Cow::Owned(out)
+}
+
 /// Default-route whole expressions that contain math-only relational/grouping
 /// glyphs which cannot be encoded correctly one space-separated token at a time.
 ///
@@ -318,6 +341,7 @@ fn combining_mark_on_single_letter(chars: &[char], i: usize) -> bool {
 #[derive(Clone, Copy, Default)]
 struct NormalizationTriggers {
     has_math_alphanumeric: bool,
+    has_roman_numeral_presentation: bool,
     has_decomposable_latin: bool,
     has_negation_combiner: bool,
     has_vector_mark: bool,
@@ -331,6 +355,7 @@ impl NormalizationTriggers {
         let mut triggers = Self::default();
         for c in text.chars() {
             triggers.has_math_alphanumeric |= may_normalize_math_alphanumeric(c);
+            triggers.has_roman_numeral_presentation |= may_normalize_roman_numeral_presentation(c);
             triggers.has_decomposable_latin |= may_decompose_accented_latin(c);
             triggers.has_negation_combiner |= c == '\u{0338}';
             triggers.has_vector_mark |= is_vector_mark(c);
@@ -721,6 +746,11 @@ pub fn encode_with_options(text: &str, options: &EncodeOptions) -> Result<Vec<u8
         normalize_math_alphanumeric_string(text)
     } else {
         Cow::Borrowed(text)
+    };
+    let normalized_text = if normalization_triggers.has_roman_numeral_presentation {
+        normalize_roman_numeral_presentation(normalized_text)
+    } else {
+        normalized_text
     };
     let normalized_text = if normalization_triggers.has_decomposable_latin {
         decompose_accented_latin(normalized_text)
@@ -1938,6 +1968,46 @@ mod coverage_targeted_tests {
     #[case::passthrough_ascii('Z', 'Z')]
     fn normalize_math_alphanumeric_block_mapping(#[case] input: char, #[case] expected: char) {
         assert_eq!(normalize_math_alphanumeric_char(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::upper_one("Ⅰ", "I")]
+    #[case::upper_two("Ⅱ", "II")]
+    #[case::upper_seven("Ⅶ", "VII")]
+    #[case::lower_four("ⅳ", "iv")]
+    #[case::embedded("제Ⅲ장", "제III장")]
+    fn normalizes_roman_numeral_presentation(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(
+            normalize_roman_numeral_presentation(Cow::Borrowed(input)),
+            expected
+        );
+    }
+
+    /// Rule 36 spells Roman numerals with Roman letters. Presentation forms must
+    /// therefore enter the same existing encoder path in spaced, attached,
+    /// particle-adjacent, and lower-case contexts.
+    #[rstest::rstest]
+    #[case::pdf_sentence(
+        "가영이는 미적분학 Ⅱ 과목을 수강하고 있다.",
+        "가영이는 미적분학 II 과목을 수강하고 있다."
+    )]
+    #[case::attached_chapter("제Ⅲ장", "제III장")]
+    #[case::adjacent_particle("Ⅶ을", "VII을")]
+    #[case::lowercase_indicator("ⅳ를", "iv를")]
+    fn unicode_roman_numeral_matches_ascii_rule_36_path(
+        #[case] presentation: &str,
+        #[case] ascii: &str,
+    ) {
+        assert_eq!(encode_to_unicode(presentation), encode_to_unicode(ascii));
+    }
+
+    #[test]
+    fn roman_numeral_normalization_leaves_other_nfkc_characters_unchanged() {
+        let input = "ↀ㈜";
+        assert_eq!(
+            normalize_roman_numeral_presentation(Cow::Borrowed(input)),
+            input
+        );
     }
 
     #[test]
