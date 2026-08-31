@@ -2383,6 +2383,14 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated
         ));
+        text.push_str(
+            "Analyzer checkpoint `ed20f99` recorded the pre-fix baseline as 4,546 candidates, \
+             2,584 exact controls, 1,962 mismatches, 1,905 pending members, and 875 localized \
+             first differences. Its dominant localized transition was reference decimal point \
+             `U+2832 ⠲` versus current Roman indicator `U+2834 ⠴` in 647 cases. After the \
+             generalized rule-43/48 guard, that transition is absent: 525 cases become exact \
+             and the other corrected prefixes expose later independent mismatches.\n",
+        );
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
@@ -2784,6 +2792,9 @@ fn markdown(report: &AnalysisReport) -> String {
     );
     text.push_str(
         "| Rules 34/54 Korean-prefixed closed Roman annotation routing | 5,141/5,141 | 65,491/83,528 | 78.41% | A fully closed Roman annotation after an all-Korean prefix stays on the prose encoder path, including attached comma/period and alphanumeric forms such as `O4O`; exact matches increased by 2,092 while the global math detector remained unchanged |\n",
+    );
+    text.push_str(
+        "| Rules 43/48 decimal-point ownership | 5,141/5,141 | 66,039/83,528 | 79.06% | A period directly between ASCII digits remains on the numeric punctuation path even when its word or sentence also contains Roman text; 647 localized Roman-entry differences were removed and 525 cases became exact |\n",
     );
     text.push_str(
         "\nEngine changes must add a row only after both the 5,141-case standard suite and \

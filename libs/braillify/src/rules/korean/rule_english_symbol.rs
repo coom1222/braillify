@@ -45,6 +45,18 @@ impl BrailleRule for RuleEnglishSymbol {
             return Ok(RuleResult::Skip);
         };
 
+        // 한글 점자 제43항·제48항: ASCII 숫자 사이의 마침표는 숫자 흐름의
+        // 소수점이다. 같은 어절 뒤쪽에 로마자가 있다는 이유만으로 이 위치에서
+        // 로마자 모드에 재진입하면 `⠴⠲`가 되어 수표 뒤의 올바른 `⠲` 앞에
+        // 불필요한 로마자표가 붙는다. 이 기호는 아래의 일반 한글 문장부호
+        // 규칙이 처리하도록 넘기고, 접미사 종류에는 관여하지 않는다.
+        if *sym == '.'
+            && ctx.prev_char().is_some_and(|ch| ch.is_ascii_digit())
+            && ctx.next_char().is_some_and(|ch| ch.is_ascii_digit())
+        {
+            return Ok(RuleResult::Continue);
+        }
+
         let mut use_english_symbol = english_logic::should_render_symbol_as_english(
             ctx.state.english_indicator,
             ctx.state.is_english,
@@ -165,5 +177,35 @@ mod tests {
         let _ = RuleEnglishSymbol.apply(&mut ctx);
 
         assert!(ctx.state.parenthesis_stack.is_empty());
+    }
+
+    #[test]
+    fn decimal_point_between_digits_is_not_an_english_entry_symbol() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("3.5P", false);
+        let mut ctx = owned.ctx_at(1);
+
+        let outcome = RuleEnglishSymbol.apply(&mut ctx).unwrap();
+
+        assert_eq!(outcome, RuleResult::Continue);
+        assert!(owned.result.is_empty());
+    }
+
+    #[rstest::rstest]
+    #[case::percent_with_later_roman("42.2%포인트(P)", "42.2")]
+    #[case::korean_unit_with_annotation("34.3리터(L)", "34.3")]
+    #[case::two_decimals_with_arrow("99.8→99.4", "99.8")]
+    #[case::roman_identifier("GPT-3.5", "3.5")]
+    fn decimal_subsequence_matches_the_standalone_rule_48_encoding(
+        #[case] input: &str,
+        #[case] decimal: &str,
+    ) {
+        let actual = crate::encode_to_unicode(input).expect("mixed decimal context must encode");
+        let standalone =
+            crate::encode_to_unicode(decimal).expect("standalone rule-48 decimal must encode");
+
+        assert!(
+            actual.contains(&standalone),
+            "input={input}, decimal={decimal}, actual={actual}, standalone={standalone}"
+        );
     }
 }
