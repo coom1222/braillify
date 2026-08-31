@@ -548,6 +548,7 @@ fn is_delimiter_or_quote(ch: char) -> bool {
 const UPPERCASE_ROMAN_HEADWORD_EXPANSION: &str =
     "uppercase_roman_headword_closed_multiword_parenthetical";
 const STANDALONE_UPPERCASE_ROMAN_WORD: &str = "standalone_multi_character_uppercase_roman_word";
+const KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL: &str = "korean_prefixed_closed_allcaps_parenthetical";
 
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
@@ -618,6 +619,34 @@ fn has_standalone_uppercase_roman_word(input: &str) -> bool {
             && is_alphanumeric_delimited
             && next != Some('(')
         {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_korean_script(ch: char) -> bool {
+    matches!(ch as u32, 0x3131..=0x318e | 0xac00..=0xd7a3)
+}
+
+/// Cross-cutting shape shared by prose acronyms and scientific formulae:
+/// an immediate Korean prefix followed by a closed, two-or-more-letter
+/// all-caps ASCII parenthetical such as `책임자(COO)` or `일산화탄소(CO)`.
+fn has_korean_prefixed_allcaps_parenthetical(input: &str) -> bool {
+    for (open, _) in input.match_indices('(') {
+        if !input[..open]
+            .chars()
+            .next_back()
+            .is_some_and(is_korean_script)
+        {
+            continue;
+        }
+        let tail = &input[open + 1..];
+        let Some(close) = tail.find(')') else {
+            continue;
+        };
+        let body = &tail[..close];
+        if body.len() >= 2 && body.bytes().all(|byte| byte.is_ascii_uppercase()) {
             return true;
         }
     }
@@ -780,6 +809,10 @@ fn analyze(
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
     let mut pending_rule_review_clusters = BTreeMap::from([
         (
+            KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             STANDALONE_UPPERCASE_ROMAN_WORD.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -824,6 +857,10 @@ fn analyze(
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
 
         for (cluster, present) in [
+            (
+                KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
+                has_korean_prefixed_allcaps_parenthetical(&item.located.case.input),
+            ),
             (
                 STANDALONE_UPPERCASE_ROMAN_WORD,
                 has_standalone_uppercase_roman_word(&item.located.case.input),
@@ -1047,7 +1084,11 @@ fn markdown(report: &AnalysisReport) -> String {
          notation, and nested parentheses are excluded deterministically. The \
          `standalone_multi_character_uppercase_roman_word` gate finds maximal ASCII-letter runs \
          of two or more capitals with non-alphanumeric boundaries; a run immediately followed \
-         by `(` is excluded so the HCA-style headword itself is not counted by both gates.\n\n",
+         by `(` is excluded so the HCA-style headword itself is not counted by both gates. The \
+         `korean_prefixed_closed_allcaps_parenthetical` gate requires an immediately preceding \
+         Korean character and a closed body of two or more uppercase ASCII letters. It \
+         intentionally contains both acronym annotations (`책임자(COO)`) and scientific \
+         formulae (`일산화탄소(CO)`) so their semantic collision remains measurable.\n\n",
     );
     text.push_str(
         "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
@@ -1120,6 +1161,12 @@ fn markdown(report: &AnalysisReport) -> String {
          formulas. The input gate cannot determine which semantic regime applies, so its output \
          differences are observations to review, not permission to infer an engine rule from the \
          corpus reference.\n\n\
+         The Korean-prefixed all-caps parenthetical cohort isolates that ambiguity more narrowly. \
+         Hangeul rules 28/29 require Roman and capitalization indicators for prose acronyms, \
+         while science rule 7 requires element-by-element capitals for chemical formulae. Both \
+         meanings can have the same input surface form. The observed `COO`/`NSC`/`MOU` output \
+         differences therefore do not justify disabling either algorithm without independent \
+         semantic evidence.\n\n\
          Corpus contradictions remain a separate gate: identical inputs with conflicting \
          references are classified as `corpus_suspect` before these cohorts are recorded and \
          would appear explicitly in each mismatch primary-class distribution. Their absence does \
@@ -1141,6 +1188,23 @@ fn markdown(report: &AnalysisReport) -> String {
              Its high frequency does not make it causal: the same input shape is exact in many \
              cases, and a sentence containing the shape may first differ at another Roman, \
              numeric, or punctuation structure. No engine change is inferred from this cohort.\n",
+            stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent Korean-prefixed all-caps parenthetical measurement: {} candidates, {} \
+             exact controls, {} mismatches, and {pending} members in the actual \
+             `pending_rule_review` subcluster. This is a semantic-collision audit, not an engine \
+             routing rule; no implementation change is inferred from its reference outputs.\n",
             stats.candidates, stats.exact, stats.mismatch
         ));
     }
@@ -1613,6 +1677,19 @@ mod tests {
     #[case::lowercase("web service", false)]
     fn detects_standalone_uppercase_roman_word(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_standalone_uppercase_roman_word(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::acronym("최고운영책임자(COO)", true)]
+    #[case::organization("국가안전보장회의(NSC)를", true)]
+    #[case::chemical_formula("일산화탄소(CO)는", true)]
+    #[case::space_before_parenthesis("책임자 (COO)", false)]
+    #[case::roman_prefix("HCA(COO)", false)]
+    #[case::mixed_case("책임자(Ceo)", false)]
+    #[case::digit_inside("규격(CO2)", false)]
+    #[case::unclosed("책임자(COO", false)]
+    fn detects_korean_prefixed_allcaps_parenthetical(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(has_korean_prefixed_allcaps_parenthetical(input), expected);
     }
 
     #[test]
