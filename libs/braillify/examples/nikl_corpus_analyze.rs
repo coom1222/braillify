@@ -142,7 +142,6 @@ struct AnalysisReport {
     exact: usize,
     mismatch: usize,
     exact_percent: f64,
-    analysis_wall_time_ms: u128,
     duplicate_inputs: usize,
     conflicting_duplicate_inputs: usize,
     primary_classes: BTreeMap<String, usize>,
@@ -765,7 +764,6 @@ fn analyze(
         exact,
         mismatch: total - exact,
         exact_percent: exact as f64 / total as f64 * 100.0,
-        analysis_wall_time_ms: 0,
         duplicate_inputs,
         conflicting_duplicate_inputs: conflicting.len(),
         primary_classes,
@@ -796,10 +794,6 @@ fn markdown(report: &AnalysisReport) -> String {
     text.push_str(&format!(
         "| Exact accuracy | {:.2}% |\n",
         report.exact_percent
-    ));
-    text.push_str(&format!(
-        "| Analysis wall time | {:.3} s |\n",
-        report.analysis_wall_time_ms as f64 / 1000.0
     ));
     text.push_str(&format!(
         "| Duplicate records | {} |\n",
@@ -1068,8 +1062,7 @@ fn run() -> Result<(), String> {
     let config = Config::parse()?;
     let cases = load_cases()?;
     let encoded = encode_cases(&cases, config.threads);
-    let mut report = analyze(cases, encoded, config.sample_limit);
-    report.analysis_wall_time_ms = started.elapsed().as_millis();
+    let report = analyze(cases, encoded, config.sample_limit);
     let json = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("cannot serialize analysis JSON: {error}"))?;
     write_file(&config.json_path, &json)?;
@@ -1079,7 +1072,7 @@ fn run() -> Result<(), String> {
         report.exact,
         report.total,
         report.exact_percent,
-        report.analysis_wall_time_ms as f64 / 1000.0,
+        started.elapsed().as_secs_f64(),
         config.report_path.display(),
         config.json_path.display()
     );
