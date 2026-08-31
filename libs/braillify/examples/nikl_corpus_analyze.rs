@@ -86,6 +86,22 @@ struct ErrorCharacterStats {
 }
 
 #[derive(Debug, Serialize)]
+struct Rule36ComplexErrorSample {
+    shard: String,
+    index: usize,
+    input: String,
+    other_unsupported_characters: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct Rule36TransitionAudit {
+    presentation_cases: usize,
+    primary_transitions: BTreeMap<String, usize>,
+    remaining_complex_errors: usize,
+    remaining_complex_error_samples: Vec<Rule36ComplexErrorSample>,
+}
+
+#[derive(Debug, Serialize)]
 struct AnalysisReport {
     corpus: &'static str,
     total: usize,
@@ -99,6 +115,7 @@ struct AnalysisReport {
     encoding_error_messages: BTreeMap<String, usize>,
     encoding_error_families: BTreeMap<String, usize>,
     singleton_error_characters: BTreeMap<String, ErrorCharacterStats>,
+    rule_36_transition_audit: Rule36TransitionAudit,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -361,6 +378,37 @@ fn classify(encoded: &EncodedCase, conflicting: &BTreeSet<String>) -> (PrimaryCl
     }
 }
 
+fn is_roman_numeral_presentation(ch: char) -> bool {
+    (0x2160..=0x217f).contains(&(ch as u32))
+}
+
+/// Reconstruct the immediately preceding rule-36 behavior without running a
+/// second engine or reading a saved expected-output lookup. Before targeted
+/// normalization, any U+2160–U+217F character made the direct and NFC paths
+/// fail. The NFKC comparison path already contains the corresponding ASCII
+/// Roman letters and is unaffected by the engine change, so it remains valid
+/// for reproducing the former `comparison_method` classification.
+fn classify_before_rule_36(
+    encoded: &EncodedCase,
+    conflicting: &BTreeSet<String>,
+) -> Option<(PrimaryClass, Reason)> {
+    encoded
+        .located
+        .case
+        .input
+        .chars()
+        .any(is_roman_numeral_presentation)
+        .then(|| {
+            let mut legacy = encoded.clone();
+            legacy.actual = Err("legacy unsupported Roman-numeral presentation".to_string());
+            legacy.nfc_actual = legacy
+                .nfc_actual
+                .as_ref()
+                .map(|_| Err("legacy unsupported Roman-numeral presentation".to_string()));
+            classify(&legacy, conflicting)
+        })
+}
+
 fn is_delimiter_or_quote(ch: char) -> bool {
     matches!(
         ch,
@@ -411,7 +459,7 @@ fn encoding_error_family(ch: char) -> &'static str {
     let nfkc = ch.to_string().nfkc().collect::<String>();
     if is_compatibility_unit_decomposition(ch, &nfkc) {
         "compatibility_unit_symbol"
-    } else if (0x2160..=0x217f).contains(&(ch as u32))
+    } else if is_roman_numeral_presentation(ch)
         && nfkc.chars().all(|part| {
             matches!(
                 part.to_ascii_uppercase(),
@@ -457,10 +505,42 @@ fn analyze(
     let mut traits = BTreeMap::new();
     let mut shards = BTreeMap::<String, ShardStats>::new();
     let mut samples = BTreeMap::<String, Vec<Sample>>::new();
+    let mut rule_36_transition_audit = Rule36TransitionAudit::default();
     let mut exact = 0usize;
 
     for item in &encoded {
         let (primary, reason) = classify(item, &conflicting);
+        if let Some((before_primary, _)) = classify_before_rule_36(item, &conflicting) {
+            rule_36_transition_audit.presentation_cases += 1;
+            let transition = format!("{} -> {}", enum_key(&before_primary), enum_key(&primary));
+            *rule_36_transition_audit
+                .primary_transitions
+                .entry(transition)
+                .or_insert(0) += 1;
+
+            if primary == PrimaryClass::ImplementationDefect && item.actual.is_err() {
+                let other_unsupported_characters = item
+                    .located
+                    .case
+                    .input
+                    .chars()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .filter(|ch| !is_roman_numeral_presentation(*ch))
+                    .filter(|ch| braillify::encode_to_unicode(&ch.to_string()).is_err())
+                    .map(|ch| format!("U+{:04X} {ch}", ch as u32))
+                    .collect::<Vec<_>>();
+                rule_36_transition_audit.remaining_complex_errors += 1;
+                rule_36_transition_audit
+                    .remaining_complex_error_samples
+                    .push(Rule36ComplexErrorSample {
+                        shard: item.located.shard.clone(),
+                        index: item.located.index,
+                        input: item.located.case.input.clone(),
+                        other_unsupported_characters,
+                    });
+            }
+        }
         let primary_key = enum_key(&primary);
         let reason_key = enum_key(&reason);
         *primary_classes.entry(primary_key).or_insert(0) += 1;
@@ -563,6 +643,7 @@ fn analyze(
         encoding_error_messages,
         encoding_error_families,
         singleton_error_characters,
+        rule_36_transition_audit,
         overlapping_traits: traits,
         shards,
         samples,
@@ -703,6 +784,55 @@ fn markdown(report: &AnalysisReport) -> String {
          [Unicode CJK Compatibility names list](https://www.unicode.org/charts/nameslist/n_3300.html).\n\n",
     );
 
+    text.push_str("## Rule 36 Roman-numeral presentation forms\n\n");
+    text.push_str(
+        "Rule 36 says that a Roman numeral is written with the corresponding Roman letters. \
+         The encoder therefore applies compatibility decomposition only to Unicode Roman \
+         Numerals U+2160–U+217F and sends the ASCII spelling through the existing rule-36 \
+         algorithm. Encoder regressions compare Unicode presentations with ASCII equivalents \
+         in the PDF sentence and in attached-Korean, particle-adjacent, and lower-case contexts. \
+         U+2180 `ↀ` and unrelated NFKC characters such as `㈜` are explicit non-targets.\n\n",
+    );
+    text.push_str(
+        "The transition audit reconstructs the immediately preceding engine behavior: direct \
+         and NFC encoding rejected U+2160–U+217F, while the analyzer's existing NFKC comparison \
+         path already used the same ASCII Roman spelling. This avoids a saved-output lookup and \
+         keeps the transition reproducible from the current corpus.\n\n",
+    );
+    text.push_str(&format!(
+        "Presentation-form cases audited: {}.\n\n",
+        report.rule_36_transition_audit.presentation_cases
+    ));
+    text.push_str("| Previous primary → current primary | Cases |\n|---|---:|\n");
+    for (transition, count) in &report.rule_36_transition_audit.primary_transitions {
+        text.push_str(&format!("| `{transition}` | {count} |\n"));
+    }
+    text.push_str(&format!(
+        "\nRemaining complex encoding errors: {}. These cases still contain another character \
+         that fails independently, so disappearance of the `roman_numeral_presentation` family \
+         does not imply that every former error case now encodes successfully.\n\n",
+        report.rule_36_transition_audit.remaining_complex_errors
+    ));
+    for sample in &report
+        .rule_36_transition_audit
+        .remaining_complex_error_samples
+    {
+        let input = sample.input.chars().take(180).collect::<String>();
+        let unsupported = if sample.other_unsupported_characters.is_empty() {
+            "none detected".to_string()
+        } else {
+            sample.other_unsupported_characters.join(", ")
+        };
+        text.push_str(&format!(
+            "- `{}` #{}: {}\n  - other independently unsupported: `{}`\n",
+            sample.shard,
+            sample.index,
+            input.replace('`', "\\`"),
+            unsupported
+        ));
+    }
+    text.push('\n');
+
     text.push_str("## Rule evidence and change log\n\n");
     text.push_str(
         "| Stage | Standard cases | Corpus exact | Corpus accuracy | Evidence |\n\
@@ -713,6 +843,9 @@ fn markdown(report: &AnalysisReport) -> String {
     );
     text.push_str(
         "| Rules 68/69 compatibility unit algorithm | 5,141/5,141 | 63,388/83,528 | 75.89% | 96 Unicode unit presentation forms use one decomposition/letter-run/attachment algorithm; encoding errors fell from 434 to 226 |\n",
+    );
+    text.push_str(
+        "| Rule 36 Unicode Roman-numeral presentation normalization | 5,141/5,141 | 63,399/83,528 | 75.90% | U+2160–U+217F use the corresponding Roman-letter spelling; 11 NFKC-comparison cases became exact, 23 encoding errors became pending review, and 3 compound errors remain |\n",
     );
     text.push_str(
         "\nEngine changes must add a row only after both the 5,141-case standard suite and \
@@ -785,6 +918,64 @@ mod tests {
     #[case::non_unit_square_log('㏒', "other_unsupported_symbol")]
     fn clusters_encoding_error_characters(#[case] input: char, #[case] expected_family: &str) {
         assert_eq!(encoding_error_family(input), expected_family);
+    }
+
+    #[rstest::rstest]
+    #[case::nfkc_comparison_becomes_exact(
+        "Ⅲ",
+        "same",
+        Some("same"),
+        "same",
+        PrimaryClass::ComparisonMethod,
+        PrimaryClass::Exact
+    )]
+    #[case::encoding_error_becomes_pending(
+        "Ⅳ장",
+        "expected",
+        Some("different"),
+        "different",
+        PrimaryClass::ImplementationDefect,
+        PrimaryClass::PendingRuleReview
+    )]
+    #[case::compound_encoding_error_remains(
+        "Ⅳ㈜",
+        "expected",
+        None,
+        "different",
+        PrimaryClass::ImplementationDefect,
+        PrimaryClass::ImplementationDefect
+    )]
+    fn reconstructs_rule_36_primary_transition(
+        #[case] input: &str,
+        #[case] expected: &str,
+        #[case] actual: Option<&str>,
+        #[case] nfkc_actual: &str,
+        #[case] expected_before: PrimaryClass,
+        #[case] expected_after: PrimaryClass,
+    ) {
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected.to_string(),
+                },
+            },
+            actual: actual.map_or_else(
+                || Err("another unsupported symbol".to_string()),
+                |value| Ok(value.to_string()),
+            ),
+            nfc_actual: None,
+            nfkc_actual: Some(Ok(nfkc_actual.to_string())),
+        };
+        let conflicts = BTreeSet::new();
+
+        let (before, _) = classify_before_rule_36(&encoded, &conflicts).unwrap();
+        let (after, _) = classify(&encoded, &conflicts);
+
+        assert_eq!(before, expected_before);
+        assert_eq!(after, expected_after);
     }
 
     #[test]
