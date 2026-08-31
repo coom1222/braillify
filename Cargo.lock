@@ -194,6 +194,7 @@ dependencies = [
  "regex",
  "rstest",
  "rustyline",
+ "serde",
  "serde_json",
  "unicode-normalization",
 ]

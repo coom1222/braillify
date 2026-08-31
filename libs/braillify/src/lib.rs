@@ -1115,6 +1115,12 @@ mod test {
             let path = entry.path();
             if path.is_dir() {
                 let subdir = path.file_name().unwrap().to_string_lossy().to_string();
+                // PDF-rule fixtures use internal notation and are checked against
+                // rule_map.json. Corpus fixtures carry Unicode references and have
+                // their own dedicated regression test below.
+                if subdir == "corpus" {
+                    continue;
+                }
                 for sub_entry in std::fs::read_dir(&path).unwrap() {
                     let sub_entry = sub_entry.unwrap();
                     let sub_path = sub_entry.path();
@@ -1189,6 +1195,124 @@ mod test {
             expected.to_string(),
             unicode.to_string(),
         )]
+    }
+
+    #[derive(serde::Deserialize)]
+    struct NiklCorpusCase {
+        id: String,
+        input: String,
+        target: String,
+        unicode: String,
+    }
+
+    #[derive(Default)]
+    struct NiklFailureStats {
+        encoding_errors: usize,
+        contains_latin: usize,
+        contains_digits: usize,
+        contains_delimiters: usize,
+        korean_text_only: usize,
+    }
+
+    fn classify_nikl_failure(input: &str, is_encoding_error: bool, stats: &mut NiklFailureStats) {
+        if is_encoding_error {
+            stats.encoding_errors += 1;
+        }
+
+        let contains_latin = input.chars().any(|ch| ch.is_ascii_alphabetic());
+        let contains_digits = input.chars().any(|ch| ch.is_ascii_digit());
+        let contains_delimiters = input.chars().any(|ch| {
+            matches!(
+                ch,
+                '(' | ')' | '[' | ']' | '{' | '}' | '“' | '”' | '‘' | '’' | '"' | '\''
+            )
+        });
+
+        stats.contains_latin += usize::from(contains_latin);
+        stats.contains_digits += usize::from(contains_digits);
+        stats.contains_delimiters += usize::from(contains_delimiters);
+        stats.korean_text_only +=
+            usize::from(!contains_latin && !contains_digits && !contains_delimiters);
+    }
+
+    /// NIKL Korean–Korean Braille Parallel Corpus (2025 v1.0) regression suite.
+    ///
+    /// This intentionally stays separate from the PDF-rule fixtures: NIKL provides
+    /// Unicode braille cells directly, rather than the project's internal notation.
+    /// `target` preserves NIKL's U+0020 cell separators; `unicode` normalizes them
+    /// to braille blank (U+2800), which is what `encode_to_unicode` returns.
+    #[test]
+    fn test_nikl_parallel_corpus() {
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test_cases/corpus/sentence.json"
+        ));
+        let cases: Vec<NiklCorpusCase> =
+            serde_json::from_reader(File::open(path).expect("NIKL corpus fixture must exist"))
+                .expect("NIKL corpus fixture must be valid JSON");
+        assert!(!cases.is_empty(), "NIKL corpus fixture must not be empty");
+
+        let mut failures = Vec::new();
+        let mut failure_stats = NiklFailureStats::default();
+        for case in &cases {
+            let normalized_target = case.target.replace(' ', &encode_unicode(0).to_string());
+            assert_eq!(
+                case.unicode, normalized_target,
+                "NIKL fixture has an invalid normalized target for {}",
+                case.id
+            );
+
+            match encode_to_unicode(&case.input) {
+                Ok(actual) if actual == case.unicode => {}
+                Ok(actual) => {
+                    classify_nikl_failure(&case.input, false, &mut failure_stats);
+                    failures.push((
+                        case.id.as_str(),
+                        case.input.as_str(),
+                        case.unicode.as_str(),
+                        "mismatch",
+                        actual,
+                    ));
+                }
+                Err(error) => {
+                    classify_nikl_failure(&case.input, true, &mut failure_stats);
+                    failures.push((
+                        case.id.as_str(),
+                        case.input.as_str(),
+                        case.unicode.as_str(),
+                        "encoding error",
+                        error,
+                    ));
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            let preview = failures
+                .iter()
+                .take(20)
+                .map(|(id, input, expected, kind, actual)| {
+                    format!(
+                        "{id} ({kind})\n  input: {input}\n  expected: {expected}\n  actual: {actual}"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!(
+                "NIKL corpus: {}/{} cases differ from the reference.\n\
+                 Failure traits (overlapping): encoding errors={}, Latin={}, digits={}, delimiters={}, Korean-text-only={}.\n\
+                 First {}:\n{}",
+                failures.len(),
+                cases.len(),
+                failure_stats.encoding_errors,
+                failure_stats.contains_latin,
+                failure_stats.contains_digits,
+                failure_stats.contains_delimiters,
+                failure_stats.korean_text_only,
+                failures.len().min(20),
+                preview
+            );
+        }
     }
 
     #[test]

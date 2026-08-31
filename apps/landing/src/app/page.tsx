@@ -1,5 +1,6 @@
 import { Box, Center, Flex, Image, Text, VStack } from '@devup-ui/react'
 
+import { CorpusAccuracy } from '@/components/home/CorpusAccuracy'
 import HomePopup from '@/components/home/HomePopup'
 import PillButton from '@/components/home/PillButton'
 import IconDiscord from '@/components/icons/IconDiscord'
@@ -171,6 +172,9 @@ export default function HomePage() {
             <DemoTabs />
           </Flex>
         </VStack>
+      </Box>
+      <Box px={['16px', null, null, '80px']} py={['30px', null, null, '60px']} w="100%">
+        <CorpusAccuracy />
       </Box>
       <Flex
         flexDirection={['column', null, null, 'row']}
