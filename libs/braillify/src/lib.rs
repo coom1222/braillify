@@ -1199,9 +1199,9 @@ mod test {
 
     #[derive(serde::Deserialize)]
     struct NiklCorpusCase {
-        id: String,
         input: String,
-        target: String,
+        internal: String,
+        expected: String,
         unicode: String,
         world: Option<String>,
     }
@@ -1266,6 +1266,11 @@ mod test {
         let mut status = Vec::with_capacity(cases.len());
 
         for case in &cases {
+            assert!(
+                !case.expected.is_empty()
+                    && case.internal.chars().count() == case.unicode.chars().count(),
+                "NIKL corpus fixture must use the standard internal/expected/unicode shape"
+            );
             let actual = encode_to_unicode(&case.input).unwrap_or_else(|error| error.to_string());
             let is_success = actual == case.unicode;
             if !is_success {
@@ -1288,7 +1293,7 @@ mod test {
             if status.len() < 10 {
                 status.push((
                     case.input.clone(),
-                    String::new(),
+                    case.internal.clone(),
                     case.unicode.clone(),
                     actual,
                     is_success,
@@ -1314,9 +1319,9 @@ mod test {
     /// NIKL Korean–Korean Braille Parallel Corpus (2025 v1.0) regression suite.
     ///
     /// This intentionally stays separate from the PDF-rule fixtures: NIKL provides
-    /// Unicode braille cells directly, rather than the project's internal notation.
-    /// `target` preserves NIKL's U+0020 cell separators; `unicode` normalizes them
-    /// to braille blank (U+2800), which is what `encode_to_unicode` returns.
+    /// The fixture uses the project's standard `input`/`internal`/`expected`/`unicode`
+    /// shape. Its Unicode reference uses braille blank (U+2800), which is what
+    /// `encode_to_unicode` returns.
     #[test]
     fn test_nikl_parallel_corpus() {
         let path = std::path::Path::new(concat!(
@@ -1331,19 +1336,12 @@ mod test {
         let mut failures = Vec::new();
         let mut failure_stats = NiklFailureStats::default();
         for case in &cases {
-            let normalized_target = case.target.replace(' ', &encode_unicode(0).to_string());
-            assert_eq!(
-                case.unicode, normalized_target,
-                "NIKL fixture has an invalid normalized target for {}",
-                case.id
-            );
-
             match encode_to_unicode(&case.input) {
                 Ok(actual) if actual == case.unicode => {}
                 Ok(actual) => {
                     classify_nikl_failure(&case.input, false, &mut failure_stats);
                     failures.push((
-                        case.id.as_str(),
+                        case.input.as_str(),
                         case.input.as_str(),
                         case.unicode.as_str(),
                         "mismatch",
@@ -1353,7 +1351,7 @@ mod test {
                 Err(error) => {
                     classify_nikl_failure(&case.input, true, &mut failure_stats);
                     failures.push((
-                        case.id.as_str(),
+                        case.input.as_str(),
                         case.input.as_str(),
                         case.unicode.as_str(),
                         "encoding error",
