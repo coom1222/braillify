@@ -579,11 +579,66 @@ const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_pa
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
 const UPPERCASE_ROMAN_HYPHEN_DIGITS: &str = "uppercase_roman_run_followed_by_hyphen_digits";
+const DECIMAL_POINT_BETWEEN_DIGITS: &str = "decimal_point_between_ascii_digits";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
     start_byte: usize,
     end_byte: usize,
+}
+
+/// Finds whitespace-delimited words containing an ASCII decimal point between
+/// digits. Rule 43 explicitly keeps punctuation between digits in the same
+/// numeric sequence, and rule 48 assigns the decimal-point cell. The whole
+/// word is retained so the output locator reproduces suffix contexts such as
+/// `%`, Roman units, Korean text, and closing punctuation.
+fn decimal_word_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = BTreeSet::new();
+    for (dot_byte, _) in input.match_indices('.') {
+        let previous = input[..dot_byte].chars().next_back();
+        let next = input[dot_byte + 1..].chars().next();
+        if !previous.is_some_and(|ch| ch.is_ascii_digit())
+            || !next.is_some_and(|ch| ch.is_ascii_digit())
+        {
+            continue;
+        }
+
+        let start_byte = input[..dot_byte]
+            .char_indices()
+            .rev()
+            .find_map(|(byte, ch)| ch.is_whitespace().then_some(byte + ch.len_utf8()))
+            .unwrap_or(0);
+        let end_byte = input[dot_byte + 1..]
+            .char_indices()
+            .find_map(|(offset, ch)| ch.is_whitespace().then_some(dot_byte + 1 + offset))
+            .unwrap_or(input.len());
+        spans.insert((start_byte, end_byte));
+    }
+    spans
+        .into_iter()
+        .map(|(start_byte, end_byte)| InputSpan {
+            start_byte,
+            end_byte,
+        })
+        .collect()
+}
+
+fn first_difference_in_decimal_word(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    korean_context_signature_ranges(
+        &item.located.case.input,
+        actual,
+        &decimal_word_spans(&item.located.case.input),
+        0,
+    )
+    .into_iter()
+    .any(|range| range.contains(&first_difference))
 }
 
 /// Finds rule-34-shaped annotations whose opening parenthesis immediately
@@ -955,6 +1010,7 @@ fn first_difference_in_korean_context_signature_spans(
 /// unrelated causes merely because a sentence also contains Roman text.
 fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
     first_difference_in_allcaps_ou_run(item)
+        || first_difference_in_decimal_word(item)
         || first_difference_in_korean_prefixed_annotation_opening(item)
         || first_difference_in_inline_parenthesized_operator(item)
         || first_difference_in_tight_triangle(item)
@@ -1518,6 +1574,10 @@ fn analyze(
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
     let mut pending_rule_review_clusters = BTreeMap::from([
         (
+            DECIMAL_POINT_BETWEEN_DIGITS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_RUN_CONTAINING_OU.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1619,6 +1679,12 @@ fn analyze(
         }
 
         for (cluster, present, localized_first_difference, localized_samples) in [
+            (
+                DECIMAL_POINT_BETWEEN_DIGITS,
+                !decimal_word_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_in_decimal_word(item)),
+                true,
+            ),
             (
                 ALLCAPS_ROMAN_RUN_CONTAINING_OU,
                 !allcaps_roman_runs_containing_ou(&item.located.case.input).is_empty(),
@@ -2046,7 +2112,10 @@ fn markdown(report: &AnalysisReport) -> String {
          range. The `allcaps_roman_run_containing_ou` gate finds maximal, alphanumeric-delimited \
          uppercase ASCII runs containing adjacent `OU`. It locates the independently encoded run \
          signature in the complete current output and counts only first differences inside that \
-         signature as localized. The `tight_triangle_mark_immediately_before_korean` gate requires literal \
+         signature as localized. The `decimal_point_between_ascii_digits` gate finds \
+         whitespace-delimited words containing `digit.digit` and reproduces each whole word in a \
+         neutral Korean context, so suffixes and punctuation remain part of the current-engine \
+         signature. The `tight_triangle_mark_immediately_before_korean` gate requires literal \
          `△한글` with no input space and includes the first following Korean cell in its localized \
          output range, so an observed missing-space difference is measured at the mark boundary.\n\n",
     );
@@ -2283,6 +2352,31 @@ fn markdown(report: &AnalysisReport) -> String {
              first difference is localized to the later headword's entry boundary/output. The \
              detector cannot be satisfied by the earlier Roman entry. No HCA-shaped engine \
              routing rule is introduced.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(DECIMAL_POINT_BETWEEN_DIGITS)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent decimal-point measurement: {} candidates, {} exact controls, {} \
+             mismatches, {pending} members in the actual `pending_rule_review` subcluster, and \
+             {}/{} evaluable mismatches whose first difference is inside the complete \
+             decimal-containing word's current-engine signature. Hangeul rules 43 and 48 keep \
+             an ASCII point between digits in the numeric sequence and encode it as the decimal \
+             point; rules 35 and 69 supply controls for adjacent Roman-number chains and Roman \
+             units. This is an implementation-candidate audit, not permission to specialize on \
+             a corpus reference.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -2902,6 +2996,32 @@ mod tests {
         #[case] transition: &str,
     ) {
         assert_eq!(cell_transition_key(expected, actual, index), transition);
+    }
+
+    #[rstest::rstest]
+    #[case::korean_suffix("값은 3.14이다.", vec!["3.14이다."])]
+    #[case::roman_identifier("GPT-3.5보다", vec!["GPT-3.5보다"])]
+    #[case::unit_and_punctuation("구간(1.0km), 종료", vec!["구간(1.0km),"])]
+    #[case::multiple_points("주소 1.2.3 확인", vec!["1.2.3"])]
+    #[case::period_not_between_digits("제3. 항목", vec![])]
+    #[case::leading_decimal("값 .48", vec![])]
+    fn detects_decimal_words(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let actual = decimal_word_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_decimal_word_in_current_korean_context_output() {
+        let input = "수치는 34.3리터(L)이다.";
+        let actual = braillify::encode_to_unicode(input).expect("decimal probe must encode");
+        let ranges = korean_context_signature_ranges(input, &actual, &decimal_word_spans(input), 0);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
     }
 
     #[test]
