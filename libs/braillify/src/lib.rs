@@ -1206,13 +1206,17 @@ mod test {
         world: Option<String>,
     }
 
-    #[derive(serde::Serialize)]
-    struct CorpusStatus {
-        total: usize,
-        braillify_fail: usize,
-        world_total: usize,
-        world_fail: usize,
-    }
+    type TestStatusRow = (
+        String,
+        String,
+        String,
+        String,
+        bool,
+        String,
+        bool,
+        String,
+        bool,
+    );
 
     #[derive(Default)]
     struct NiklFailureStats {
@@ -1244,10 +1248,10 @@ mod test {
             usize::from(!contains_latin && !contains_digits && !contains_delimiters);
     }
 
-    /// Writes the corpus aggregate consumed by the statically exported test-case page.
-    /// This is intentionally separate from the PDF-rule fixture status: the NIKL corpus
-    /// uses Unicode references and is an accuracy benchmark rather than a pass/fail gate.
-    fn write_nikl_corpus_status() {
+    /// Collects NIKL results in the same shape as the PDF-rule fixture status.
+    /// Corpus mismatches are benchmark data, so they do not fail the PDF-rule test.
+    fn collect_nikl_corpus_status() -> (usize, usize, usize, usize, usize, usize, Vec<TestStatusRow>)
+    {
         let path = std::path::Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../test_cases/corpus/sentence.json"
@@ -1259,27 +1263,52 @@ mod test {
         let mut braillify_fail = 0;
         let mut world_total = 0;
         let mut world_fail = 0;
+        let mut status = Vec::with_capacity(cases.len());
 
         for case in &cases {
-            if encode_to_unicode(&case.input).as_deref() != Ok(case.unicode.as_str()) {
+            let actual = encode_to_unicode(&case.input).unwrap_or_else(|error| error.to_string());
+            let is_success = actual == case.unicode;
+            if !is_success {
                 braillify_fail += 1;
             }
-            if let Some(world) = case.world.as_deref().filter(|world| !world.is_empty()) {
+            let world = case
+                .world
+                .as_deref()
+                .unwrap_or_default()
+                .replace(' ', &braille_blank);
+            let world_is_success = !world.is_empty() && world == case.unicode;
+            if !world.is_empty() {
                 world_total += 1;
-                if world.replace(' ', &braille_blank) != case.unicode {
+                if !world_is_success {
                     world_fail += 1;
                 }
             }
+            // The static landing page uses the same table/list as PDF fixtures.
+            // Keep its sample bounded while the aggregate above remains full-corpus.
+            if status.len() < 10 {
+                status.push((
+                    case.input.clone(),
+                    String::new(),
+                    case.unicode.clone(),
+                    actual,
+                    is_success,
+                    world,
+                    world_is_success,
+                    String::new(),
+                    false,
+                ));
+            }
         }
 
-        let status = CorpusStatus {
-            total: cases.len(),
+        (
+            cases.len(),
             braillify_fail,
             world_total,
             world_fail,
-        };
-        let status_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus_status.json");
-        serde_json::to_writer_pretty(File::create(status_path).unwrap(), &status).unwrap();
+            0,
+            0,
+            status,
+        )
     }
 
     /// NIKL Korean–Korean Braille Parallel Corpus (2025 v1.0) regression suite.
@@ -1364,7 +1393,6 @@ mod test {
 
     #[test]
     pub fn test_by_testcase() {
-        write_nikl_corpus_status();
         let files = collect_test_files();
         let mut total = 0;
         let mut failed = 0;
@@ -1380,7 +1408,11 @@ mod test {
         )
         .unwrap();
 
-        let rule_map_keys: std::collections::HashSet<String> = rule_map.keys().cloned().collect();
+        let rule_map_keys: std::collections::HashSet<String> = rule_map
+            .keys()
+            .filter(|key| key.as_str() != "corpus/sentence")
+            .cloned()
+            .collect();
         let file_keys: std::collections::HashSet<_> =
             files.iter().map(|(_, key)| key.clone()).collect();
         let missing_keys = rule_map_keys.difference(&file_keys).collect::<Vec<_>>();
@@ -1404,18 +1436,6 @@ mod test {
             let mut file_world_failed = 0;
             let mut file_jeomsarang_total = 0;
             let mut file_jeomsarang_failed = 0;
-            // (input, note, expected, actual, is_success, world, world_is_success, jeomsarang, jeomsarang_is_success)
-            type TestStatusRow = (
-                String,
-                String,
-                String,
-                String,
-                bool,
-                String,
-                bool,
-                String,
-                bool,
-            );
             let mut test_status: Vec<TestStatusRow> = Vec::new();
 
             for (line_num, record) in records.iter().enumerate() {
@@ -1608,6 +1628,8 @@ mod test {
                 ),
             );
         }
+
+        file_stats.insert("corpus/sentence".to_string(), collect_nikl_corpus_status());
 
         if !failed_cases.is_empty() {
             println!("\n실패한 케이스:");
