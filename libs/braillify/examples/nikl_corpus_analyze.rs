@@ -566,9 +566,13 @@ const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
+const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
+const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
+    "mixed_roman_korean_word_before_uppercase_headword_expansion";
+const UPPERCASE_ROMAN_HYPHEN_DIGITS: &str = "uppercase_roman_run_followed_by_hyphen_digits";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AllcapsRomanRun {
+struct InputSpan {
     start_byte: usize,
     end_byte: usize,
 }
@@ -578,7 +582,7 @@ struct AllcapsRomanRun {
 /// This is an input gate for a pronunciation-sensitive UEB diagnostic, not a
 /// claim that the run is an initialism. Alphanumeric outer boundaries exclude
 /// fragments of identifiers while retaining parenthesized and standalone runs.
-fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<AllcapsRomanRun> {
+fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
     let bytes = input.as_bytes();
     let mut runs = Vec::new();
     let mut cursor = 0;
@@ -606,7 +610,7 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<AllcapsRomanRun> {
             && previous.is_none_or(|ch| !ch.is_ascii_alphanumeric())
             && next.is_none_or(|ch| !ch.is_ascii_alphanumeric())
         {
-            runs.push(AllcapsRomanRun {
+            runs.push(InputSpan {
                 start_byte,
                 end_byte,
             });
@@ -618,20 +622,70 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<AllcapsRomanRun> {
 /// Locates each detected run in the full current-engine output by searching
 /// for that run's independently encoded signature. This uses neither the
 /// corpus reference nor a hard-coded braille value.
-fn allcaps_ou_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+fn current_engine_signature_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+    leading_boundary_cells: usize,
+) -> Vec<std::ops::Range<usize>> {
     let mut ranges = BTreeSet::new();
-    for candidate in allcaps_roman_runs_containing_ou(input) {
+    for candidate in spans {
         let run = &input[candidate.start_byte..candidate.end_byte];
         let Ok(signature) = braillify::encode_to_unicode(run) else {
             continue;
         };
         let signature_cells = signature.chars().count();
         for (start_byte, _) in actual.match_indices(&signature) {
-            let start = actual[..start_byte].chars().count();
-            ranges.insert((start, start + signature_cells));
+            let signature_start = actual[..start_byte].chars().count();
+            let start = signature_start.saturating_sub(leading_boundary_cells);
+            ranges.insert((start, signature_start + signature_cells));
         }
     }
     ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+/// Produces the current mixed-Korean routing signature for a candidate. This
+/// differs from encoding the candidate in isolation when the pure-English UEB
+/// preflight owns the isolated text but the mixed document routes it as math.
+fn korean_context_signature(run: &str) -> Option<String> {
+    let left = braillify::encode_to_unicode("가").ok()?;
+    let right = braillify::encode_to_unicode("나").ok()?;
+    let probe = braillify::encode_to_unicode(&format!("가 {run} 나")).ok()?;
+    let probe_cells = probe.chars().collect::<Vec<_>>();
+    let start = left.chars().count();
+    let end = probe_cells.len().checked_sub(right.chars().count())?;
+    let middle = probe_cells.get(start..end)?;
+    let first_content = middle.iter().position(|cell| *cell != '⠀')?;
+    let last_content = middle.iter().rposition(|cell| *cell != '⠀')?;
+    Some(middle[first_content..=last_content].iter().collect())
+}
+
+fn korean_context_signature_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+    leading_boundary_cells: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = BTreeSet::new();
+    for candidate in spans {
+        let run = &input[candidate.start_byte..candidate.end_byte];
+        let Some(signature) = korean_context_signature(run) else {
+            continue;
+        };
+        let signature_cells = signature.chars().count();
+        for (start_byte, _) in actual.match_indices(&signature) {
+            let signature_start = actual[..start_byte].chars().count();
+            ranges.insert((
+                signature_start.saturating_sub(leading_boundary_cells),
+                signature_start + signature_cells,
+            ));
+        }
+    }
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+fn allcaps_ou_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+    current_engine_signature_ranges(input, actual, &allcaps_roman_runs_containing_ou(input), 0)
 }
 
 fn first_difference_in_allcaps_ou_run(item: &EncodedCase) -> bool {
@@ -647,14 +701,152 @@ fn first_difference_in_allcaps_ou_run(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+/// Finds a standalone single capital immediately followed by a non-empty,
+/// closed ASCII-digit parenthetical, such as `A(14)`. The span is deliberately
+/// semantic-neutral: prose labels and mathematical function notation can share
+/// this surface form.
+fn single_capital_parenthesized_digit_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    for (start_byte, ch) in input.char_indices() {
+        if !ch.is_ascii_uppercase()
+            || input[..start_byte]
+                .chars()
+                .next_back()
+                .is_some_and(|previous| previous.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        let open = start_byte + 1;
+        if bytes.get(open) != Some(&b'(') {
+            continue;
+        }
+        let mut cursor = open + 1;
+        let digit_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == digit_start || bytes.get(cursor) != Some(&b')') {
+            continue;
+        }
+        let end_byte = cursor + 1;
+        if input[end_byte..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        spans.push(InputSpan {
+            start_byte,
+            end_byte,
+        });
+    }
+    spans
+}
+
+/// Finds a maximal uppercase ASCII run followed by ASCII hyphen-minus and a
+/// non-empty digit run, such as `D-100`, `F-35`, or `AH-64`. Identifier and
+/// subtraction readings deliberately remain separate semantic possibilities.
+fn uppercase_roman_hyphen_digit_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_uppercase() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+        let start_byte = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_uppercase) {
+            cursor += 1;
+        }
+        if input[..start_byte]
+            .chars()
+            .next_back()
+            .is_some_and(|previous| previous.is_ascii_alphanumeric())
+            || bytes.get(cursor) != Some(&b'-')
+        {
+            continue;
+        }
+        cursor += 1;
+        let digit_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == digit_start
+            || input[cursor..]
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        spans.push(InputSpan {
+            start_byte,
+            end_byte: cursor,
+        });
+    }
+    spans
+}
+
+fn first_difference_in_signature_spans(
+    item: &EncodedCase,
+    spans: &[InputSpan],
+    leading_boundary_cells: usize,
+) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    current_engine_signature_ranges(
+        &item.located.case.input,
+        actual,
+        spans,
+        leading_boundary_cells,
+    )
+    .into_iter()
+    .any(|range| range.contains(&first_difference))
+}
+
+fn first_difference_in_korean_context_signature_spans(
+    item: &EncodedCase,
+    spans: &[InputSpan],
+    leading_boundary_cells: usize,
+) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    korean_context_signature_ranges(
+        &item.located.case.input,
+        actual,
+        spans,
+        leading_boundary_cells,
+    )
+    .into_iter()
+    .any(|range| range.contains(&first_difference))
+}
+
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
 ///
 /// This is deliberately an analyzer diagnostic, not an engine rule. Requiring
 /// only ASCII letters and spaces inside the closed parenthesis also excludes
 /// visible operators, subscript/superscript notation, and nested parentheses.
-fn has_uppercase_roman_headword_expansion(input: &str) -> bool {
+fn uppercase_roman_headword_expansion_spans(input: &str) -> Vec<InputSpan> {
     let bytes = input.as_bytes();
+    let mut spans = Vec::new();
     for (open, _) in input.match_indices('(') {
         let mut headword_start = open;
         while headword_start > 0 && bytes[headword_start - 1].is_ascii_alphabetic() {
@@ -680,10 +872,44 @@ fn has_uppercase_roman_headword_expansion(input: &str) -> bool {
         }
 
         if contents.split_ascii_whitespace().count() >= 2 {
-            return true;
+            spans.push(InputSpan {
+                start_byte: headword_start,
+                end_byte: open,
+            });
         }
     }
-    false
+    spans
+}
+
+fn has_uppercase_roman_headword_expansion(input: &str) -> bool {
+    !uppercase_roman_headword_expansion_spans(input).is_empty()
+}
+
+/// Narrows the HCA-style diagnostic to a position-sensitive mode boundary:
+/// a preceding whitespace-delimited word contains Roman letters and ends in
+/// Korean, followed by an uppercase headword expansion. This identifies a
+/// mixed Roman+Korean particle boundary without naming a particular particle.
+fn mixed_roman_korean_before_headword_expansion_spans(input: &str) -> Vec<InputSpan> {
+    uppercase_roman_headword_expansion_spans(input)
+        .into_iter()
+        .filter(|span| {
+            let before = &input[..span.start_byte];
+            if !before.chars().next_back().is_some_and(char::is_whitespace) {
+                return false;
+            }
+            let previous_word = before
+                .trim_end_matches(char::is_whitespace)
+                .rsplit(char::is_whitespace)
+                .next()
+                .unwrap_or("");
+            previous_word.chars().any(|ch| ch.is_ascii_alphabetic())
+                && previous_word.chars().any(is_korean_script)
+                && previous_word
+                    .chars()
+                    .next_back()
+                    .is_some_and(is_korean_script)
+        })
+        .collect()
 }
 
 /// Finds a maximal, alphanumeric-delimited ASCII letter run of two or more
@@ -1166,6 +1392,14 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            SINGLE_CAPITAL_PARENTHESIZED_DIGITS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             STANDALONE_UPPERCASE_ROMAN_WORD.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1175,6 +1409,10 @@ fn analyze(
         ),
         (
             UPPERCASE_ROMAN_HEADWORD_EXPANSION.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            UPPERCASE_ROMAN_HYPHEN_DIGITS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
     ]);
@@ -1246,6 +1484,25 @@ fn analyze(
                 Some(first_difference_in_inline_parenthesized_operator(item)),
             ),
             (
+                MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION,
+                !mixed_roman_korean_before_headword_expansion_spans(&item.located.case.input)
+                    .is_empty(),
+                Some(first_difference_in_signature_spans(
+                    item,
+                    &mixed_roman_korean_before_headword_expansion_spans(&item.located.case.input),
+                    1,
+                )),
+            ),
+            (
+                SINGLE_CAPITAL_PARENTHESIZED_DIGITS,
+                !single_capital_parenthesized_digit_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_in_signature_spans(
+                    item,
+                    &single_capital_parenthesized_digit_spans(&item.located.case.input),
+                    1,
+                )),
+            ),
+            (
                 STANDALONE_UPPERCASE_ROMAN_WORD,
                 has_standalone_uppercase_roman_word(&item.located.case.input),
                 None,
@@ -1259,6 +1516,15 @@ fn analyze(
                 UPPERCASE_ROMAN_HEADWORD_EXPANSION,
                 has_uppercase_roman_headword_expansion(&item.located.case.input),
                 None,
+            ),
+            (
+                UPPERCASE_ROMAN_HYPHEN_DIGITS,
+                !uppercase_roman_hyphen_digit_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_in_korean_context_signature_spans(
+                    item,
+                    &uppercase_roman_hyphen_digit_spans(&item.located.case.input),
+                    1,
+                )),
             ),
         ] {
             if !present {
@@ -1524,6 +1790,18 @@ fn markdown(report: &AnalysisReport) -> String {
          contents are two or more ASCII Roman words separated only by spaces. Because the \
          contents admit only letters and spaces, visible operators, subscript/superscript \
          notation, and nested parentheses are excluded deterministically. The \
+         `mixed_roman_korean_word_before_uppercase_headword_expansion` gate further requires a \
+         whitespace-delimited preceding word that contains both ASCII Roman and Korean and ends \
+         in Korean. It locates the following uppercase headword itself, including its immediately \
+         preceding emitted cell, so an earlier Roman entry in the same sentence cannot satisfy \
+         the output audit. The `single_capital_followed_by_parenthesized_digits` gate requires a \
+         standalone capital, a non-empty closed ASCII-digit parenthetical, and alphanumeric outer \
+         boundaries. It likewise includes the emitted entry-boundary cell in localization. The \
+         `uppercase_roman_run_followed_by_hyphen_digits` gate requires a maximal uppercase ASCII \
+         run, literal ASCII hyphen-minus, a non-empty digit run, and alphanumeric outer \
+         boundaries. Its localized range includes the current encoded run and its immediately \
+         preceding cell, keeping `F-35`-style routing separate from both parenthesized digits and \
+         headword expansions. The \
          `standalone_multi_character_uppercase_roman_word` gate finds maximal ASCII-letter runs \
          of two or more capitals with non-alphanumeric boundaries; a run immediately followed \
          by `(` is excluded so the HCA-style headword itself is not counted by both gates. The \
@@ -1649,6 +1927,28 @@ fn markdown(report: &AnalysisReport) -> String {
          meanings can have the same input surface form. The observed `COO`/`NSC`/`MOU` output \
          differences therefore do not justify disabling either algorithm without independent \
          semantic evidence.\n\n\
+         Two narrower cohorts separate causes hidden by the frequent `U+2834 -> U+2800` cell \
+         transition. `single_capital_followed_by_parenthesized_digits` reproduces the current \
+         math-token routing of forms such as `A(14)`: Hangeul rules 29 and 34 govern a Roman \
+         section and a parenthesized Roman form, while math rule 6 independently defines \
+         parenthesized function notation such as `f(x)`. A capital and numeric argument do not \
+         remove that mathematical counterexample, so this localized routing difference remains \
+         pending rather than authorizing an input-shape exception. \
+         `mixed_roman_korean_word_before_uppercase_headword_expansion` separately targets the \
+         next Roman headword after a mixed Roman+Korean word (for example, a Korean particle \
+         attached to the previous Roman name). Its range is anchored to that later headword, not \
+         to the earlier Roman entry. Nevertheless, the closed multiword parenthetical shape still \
+         cannot exclude every mathematical interpretation under math rules 6, 11, 12, and 45, \
+         as recorded for the broader HCA-style cohort. The headword shape is therefore not added \
+         to engine routing; the two causes and their controls remain separately measurable.\n\n\
+         The uppercase-Roman hyphen-digits cohort is a third independent cause. Hangeul rule 35 \
+         explicitly shows `D-100` as a Roman-and-number continuation (2024 Korean-rules PDF \
+         p.29), while math rule 2 defines subtraction and the math chapters allow uppercase Roman \
+         variables. The surface form alone therefore does not prove whether `F-35` is an \
+         identifier or a subtraction expression. This cohort records the current operator-routing \
+         signature and exact controls without merging it into either `A(14)` or HCA-style \
+         diagnostics. No engine change is made without both a safe semantic boundary and exact \
+         controls.\n\n\
          The all-caps `OU` cohort isolates a frequent output transition without treating the \
          reference as a rule. Hangeul rules 28, 29, and 32 delegate Roman-letter content to UEB \
          (2024 Korean-rules PDF p.25 and following rules). \
@@ -1697,6 +1997,73 @@ fn markdown(report: &AnalysisReport) -> String {
          not prove a reference correct; it only means that this deterministic contradiction test \
          did not fire.\n",
     );
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(UPPERCASE_ROMAN_HYPHEN_DIGITS)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent uppercase-Roman hyphen-digits measurement: {} candidates, {} exact \
+             controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
+             subcluster, and {}/{} evaluable mismatches whose first difference is inside the \
+             target run plus its entry boundary. It remains distinct from parenthesized digits \
+             and headword expansions; no engine change is inferred.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(SINGLE_CAPITAL_PARENTHESIZED_DIGITS)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent single-capital parenthesized-digits measurement: {} candidates, {} \
+             exact controls, {} mismatches, {pending} members in the actual \
+             `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose first \
+             difference is inside the target run plus its entry boundary. No engine change is \
+             inferred from the ambiguous prose/function surface form.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent mixed Roman+Korean boundary before uppercase headword-expansion \
+             measurement: {} candidates, {} exact controls, {} mismatches, {pending} members in \
+             the actual `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose \
+             first difference is localized to the later headword's entry boundary/output. The \
+             detector cannot be satisfied by the earlier Roman entry. No HCA-shaped engine \
+             routing rule is introduced.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
     if let Some(stats) = report
         .pending_rule_review_clusters
         .get(ALLCAPS_ROMAN_RUN_CONTAINING_OU)
@@ -2291,6 +2658,94 @@ mod tests {
     #[case::nested_parenthetical("AB(C (D E))", false)]
     fn detects_uppercase_roman_headword_expansion(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_uppercase_roman_headword_expansion(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::person_label("학생 A(14)양", vec!["A(14)"])]
+    #[case::standalone("A(1)", vec!["A(1)"])]
+    #[case::multiple("A(11)과 B(15)", vec!["A(11)", "B(15)"])]
+    #[case::lowercase("a(14)", vec![])]
+    #[case::multi_capital("AB(14)", vec![])]
+    #[case::empty_parenthetical("A()", vec![])]
+    #[case::letter_argument("A(x)", vec![])]
+    #[case::ascii_suffix("A(14)b", vec![])]
+    fn detects_single_capital_parenthesized_digits(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = single_capital_parenthesized_digit_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::single_capital("미 F-35 전투기", vec!["F-35"])]
+    #[case::multi_capital("육군 AH-64 헬기", vec!["AH-64"])]
+    #[case::rule_35_shape("수능 D-100일", vec!["D-100"])]
+    #[case::multiple("F-35와 AH-64", vec!["F-35", "AH-64"])]
+    #[case::lowercase("x-1", vec![])]
+    #[case::missing_digits("F-", vec![])]
+    #[case::unicode_minus("F−35", vec![])]
+    #[case::ascii_suffix("F-35A", vec![])]
+    fn detects_uppercase_roman_hyphen_digits(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let actual = uppercase_roman_hyphen_digit_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_hyphen_digit_run_through_mixed_korean_routing() {
+        let input = "한글 F-35 전투기";
+        let spans = uppercase_roman_hyphen_digit_spans(input);
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = korean_context_signature_ranges(input, &actual, &spans, 1);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&input[spans[0].start_byte..spans[0].end_byte], "F-35");
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+    }
+
+    #[rstest::rstest]
+    #[case::mixed_particle_before_expansion(
+        "Matter와 HCA(Home Connectivity Alliance) 표준",
+        vec!["HCA"]
+    )]
+    #[case::another_korean_suffix("Device는 ABC(Alpha Beta Company) 규격", vec!["ABC"])]
+    #[case::korean_only_previous("기기와 HCA(Home Connectivity Alliance) 표준", vec![])]
+    #[case::roman_only_previous("Matter HCA(Home Connectivity Alliance) 표준", vec![])]
+    #[case::no_space_boundary("Matter와HCA(Home Connectivity Alliance)", vec![])]
+    #[case::single_parenthetical_word("Matter와 HCA(Alliance)", vec![])]
+    fn detects_mixed_roman_korean_boundary_before_headword_expansion(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = mixed_roman_korean_before_headword_expansion_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_later_headword_instead_of_earlier_roman_entry() {
+        let input = "한글 Matter와 HCA(Home Connectivity Alliance) 표준";
+        let spans = mixed_roman_korean_before_headword_expansion_spans(input);
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = current_engine_signature_ranges(input, &actual, &spans, 1);
+        let first_roman_entry = actual
+            .chars()
+            .position(|cell| cell == '⠴')
+            .expect("Matter must have an earlier Roman entry");
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&input[spans[0].start_byte..spans[0].end_byte], "HCA");
+        assert_eq!(ranges.len(), 1);
+        assert!(first_roman_entry < ranges[0].start);
     }
 
     #[rstest::rstest]
