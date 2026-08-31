@@ -555,6 +555,7 @@ const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
     "multi_character_allcaps_roman_runs_joined_by_middle_dot";
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
+const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
 
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
@@ -789,6 +790,57 @@ fn first_difference_in_inline_parenthesized_operator(item: &EncodedCase) -> bool
         .any(|range| range.contains(&first_difference))
 }
 
+fn tight_triangle_positions(input: &str) -> Vec<usize> {
+    input
+        .match_indices('△')
+        .filter_map(|(byte, mark)| {
+            input[byte + mark.len()..]
+                .chars()
+                .next()
+                .is_some_and(is_korean_script)
+                .then_some(byte)
+        })
+        .collect()
+}
+
+/// Current-engine ranges for `△한글`, including the first Korean cell after
+/// the mark. A missing reference space therefore differs inside this range,
+/// while unrelated earlier sentence differences do not count as causal.
+fn tight_triangle_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let marker = braillify::encode_to_unicode("△")
+        .expect("triangle probe must encode")
+        .chars()
+        .collect::<Vec<_>>();
+    tight_triangle_positions(input)
+        .into_iter()
+        .filter_map(|byte| {
+            let start = braillify::encode_to_unicode(&input[..byte])
+                .ok()?
+                .chars()
+                .count();
+            let marker_end = start.checked_add(marker.len())?;
+            let range_end = marker_end.checked_add(1)?;
+            (actual_cells.get(start..marker_end) == Some(marker.as_slice())
+                && actual_cells.get(marker_end).is_some())
+            .then_some(start..range_end)
+        })
+        .collect()
+}
+
+fn first_difference_in_tight_triangle(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    tight_triangle_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn enum_key<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .expect("enum serialization must succeed")
@@ -966,6 +1018,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            TIGHT_TRIANGLE_BEFORE_KOREAN.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             UPPERCASE_ROMAN_HEADWORD_EXPANSION.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1025,6 +1081,11 @@ fn analyze(
                 STANDALONE_UPPERCASE_ROMAN_WORD,
                 has_standalone_uppercase_roman_word(&item.located.case.input),
                 None,
+            ),
+            (
+                TIGHT_TRIANGLE_BEFORE_KOREAN,
+                !tight_triangle_positions(&item.located.case.input).is_empty(),
+                Some(first_difference_in_tight_triangle(item)),
             ),
             (
                 UPPERCASE_ROMAN_HEADWORD_EXPANSION,
@@ -1260,7 +1321,9 @@ fn markdown(report: &AnalysisReport) -> String {
          `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
          traits, it also locates the current engine's emitted structure and counts a mismatch as \
          signature-local only when the sentence's first differing cell falls inside that output \
-         range.\n\n",
+         range. The `tight_triangle_mark_immediately_before_korean` gate requires literal \
+         `△한글` with no input space and includes the first following Korean cell in its localized \
+         output range, so an observed missing-space difference is measured at the mark boundary.\n\n",
     );
     text.push_str(
         "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
@@ -1371,6 +1434,12 @@ fn markdown(report: &AnalysisReport) -> String {
          mismatches whose first difference was signature-local. The generalized rule-46/49 fix \
          is evaluated below against that immutable baseline rather than inferred from a reference \
          string.\n\n\
+         The tight-triangle cohort is not an implementation premise. Hangeul rule 49 assigns `△` \
+         the omission-mark role and requires print spacing to be followed, while rule 72 also \
+         assigns the same glyph a bullet role but shows a print space after every bullet. A tight \
+         corpus input does not identify which role was intended, and adding a space absent from \
+         the input would contradict rule 49 unless independent layout evidence establishes a \
+         bullet. Localized mismatches are therefore corpus/layout review evidence only.\n\n\
          Corpus contradictions remain a separate gate: identical inputs with conflicting \
          references are classified as `corpus_suspect` before these cohorts are recorded and \
          would appear explicitly in each mismatch primary-class distribution. Their absence does \
@@ -1457,6 +1526,27 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.exact,
             report.exact,
             report.exact as isize - 65_491
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(TIGHT_TRIANGLE_BEFORE_KOREAN)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent tight-triangle measurement: {} candidates, {} exact controls, {} \
+             mismatches, {pending} members in the actual `pending_rule_review` subcluster, and \
+             {}/{} evaluable mismatches whose first difference is inside the `△` plus first-Korean \
+             output range. No engine change is inferred.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
         ));
     }
 
@@ -1983,6 +2073,27 @@ mod tests {
         let input = "양(+)극";
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = inline_parenthesized_operator_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::tight("△보성군", 1)]
+    #[case::embedded("목록 △교과전형", 1)]
+    #[case::spaced("△ 보성군", 0)]
+    #[case::repeated_omission("△△ 종목", 0)]
+    #[case::square_bullet("□2021", 0)]
+    fn detects_tight_triangle_before_korean(#[case] input: &str, #[case] expected: usize) {
+        assert_eq!(tight_triangle_positions(input).len(), expected);
+    }
+
+    #[test]
+    fn locates_tight_triangle_and_first_korean_output() {
+        let input = "△보성군";
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = tight_triangle_actual_ranges(input, &actual);
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
