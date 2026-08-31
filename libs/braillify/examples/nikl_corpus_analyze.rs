@@ -154,6 +154,8 @@ struct PendingRuleReviewClusterStats {
     exact: usize,
     mismatch: usize,
     conflicting_reference_cases: usize,
+    output_signature_mismatches_evaluated: usize,
+    first_difference_in_output_signature: usize,
     mismatch_primary_classes: BTreeMap<String, usize>,
     samples: BTreeMap<String, Vec<PendingRuleReviewClusterSample>>,
 }
@@ -551,6 +553,8 @@ const STANDALONE_UPPERCASE_ROMAN_WORD: &str = "standalone_multi_character_upperc
 const KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL: &str = "korean_prefixed_closed_allcaps_parenthetical";
 const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
     "multi_character_allcaps_roman_runs_joined_by_middle_dot";
+const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
+    "korean_inline_parenthesized_single_arithmetic_operator";
 
 /// Input-only candidate gate for acronym expansions such as
 /// `HCA(Home Connectivity Alliance)`.
@@ -693,6 +697,98 @@ fn has_allcaps_roman_middle_dot_runs(input: &str) -> bool {
     false
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InlineParenthesizedOperator {
+    open_byte: usize,
+    operator: char,
+}
+
+/// Finds `한글(<operator>)한글` spans without assigning a meaning from the
+/// corpus reference. The operator set is exactly the arithmetic set named by
+/// Hangeul rules 45/46; parentheses remain visible input boundaries.
+fn inline_parenthesized_operators(input: &str) -> Vec<InlineParenthesizedOperator> {
+    let mut matches = Vec::new();
+    for (open_byte, _) in input.match_indices('(') {
+        if !input[..open_byte]
+            .chars()
+            .next_back()
+            .is_some_and(is_korean_script)
+        {
+            continue;
+        }
+
+        let tail = &input[open_byte + 1..];
+        let Some(operator) = tail.chars().next() else {
+            continue;
+        };
+        if !matches!(
+            operator,
+            '+' | '-' | '\u{2212}' | '\u{00d7}' | '\u{00f7}' | '='
+        ) {
+            continue;
+        }
+        let after_operator = &tail[operator.len_utf8()..];
+        let Some(after_close) = after_operator.strip_prefix(')') else {
+            continue;
+        };
+        if after_close.chars().next().is_some_and(is_korean_script) {
+            matches.push(InlineParenthesizedOperator {
+                open_byte,
+                operator,
+            });
+        }
+    }
+    matches
+}
+
+/// Returns the current engine's actual cell ranges for the detected input
+/// structures. This is deliberately derived from encoding a neutral Korean
+/// probe rather than from the corpus reference. A range is retained only when
+/// the full sentence has the same current-engine signature at the cell offset
+/// produced by the prefix ending immediately before `(`.
+fn inline_parenthesized_operator_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let left_probe_cells = braillify::encode_to_unicode("가")
+        .expect("neutral Korean probe must encode")
+        .chars()
+        .count();
+    let right_probe_cells = braillify::encode_to_unicode("나")
+        .expect("neutral Korean probe must encode")
+        .chars()
+        .count();
+
+    inline_parenthesized_operators(input)
+        .into_iter()
+        .filter_map(|candidate| {
+            let prefix = braillify::encode_to_unicode(&input[..candidate.open_byte]).ok()?;
+            let start = prefix.chars().count();
+            let probe =
+                braillify::encode_to_unicode(&format!("가({})나", candidate.operator)).ok()?;
+            let probe_cells = probe.chars().collect::<Vec<_>>();
+            let end = probe_cells.len().checked_sub(right_probe_cells)?;
+            let signature = probe_cells.get(left_probe_cells..end)?;
+            let actual_end = start.checked_add(signature.len())?;
+            (actual_cells.get(start..actual_end) == Some(signature)).then_some(start..actual_end)
+        })
+        .collect()
+}
+
+fn first_difference_in_inline_parenthesized_operator(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    inline_parenthesized_operator_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn enum_key<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .expect("enum serialization must succeed")
@@ -778,6 +874,7 @@ fn record_structural_cohort_case(
     primary_key: &str,
     reason_key: &str,
     sample_limit: usize,
+    first_difference_in_output_signature: Option<bool>,
 ) {
     stats.candidates += 1;
     let outcome = if primary == PrimaryClass::Exact {
@@ -785,6 +882,10 @@ fn record_structural_cohort_case(
         "exact"
     } else {
         stats.mismatch += 1;
+        if let Some(is_in_signature) = first_difference_in_output_signature {
+            stats.output_signature_mismatches_evaluated += 1;
+            stats.first_difference_in_output_signature += usize::from(is_in_signature);
+        }
         if primary == PrimaryClass::CorpusSuspect {
             stats.conflicting_reference_cases += 1;
         }
@@ -857,6 +958,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            KOREAN_INLINE_PARENTHESIZED_OPERATOR.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             STANDALONE_UPPERCASE_ROMAN_WORD.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -900,22 +1005,31 @@ fn analyze(
         *primary_classes.entry(primary_key.clone()).or_insert(0) += 1;
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
 
-        for (cluster, present) in [
+        for (cluster, present, localized_first_difference) in [
             (
                 ALLCAPS_ROMAN_MIDDLE_DOT_RUNS,
                 has_allcaps_roman_middle_dot_runs(&item.located.case.input),
+                None,
             ),
             (
                 KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
                 has_korean_prefixed_allcaps_parenthetical(&item.located.case.input),
+                None,
+            ),
+            (
+                KOREAN_INLINE_PARENTHESIZED_OPERATOR,
+                !inline_parenthesized_operators(&item.located.case.input).is_empty(),
+                Some(first_difference_in_inline_parenthesized_operator(item)),
             ),
             (
                 STANDALONE_UPPERCASE_ROMAN_WORD,
                 has_standalone_uppercase_roman_word(&item.located.case.input),
+                None,
             ),
             (
                 UPPERCASE_ROMAN_HEADWORD_EXPANSION,
                 has_uppercase_roman_headword_expansion(&item.located.case.input),
+                None,
             ),
         ] {
             if !present {
@@ -931,6 +1045,7 @@ fn analyze(
                 &primary_key,
                 &reason_key,
                 sample_limit,
+                localized_first_difference,
             );
         }
 
@@ -1140,7 +1255,12 @@ fn markdown(report: &AnalysisReport) -> String {
          `multi_character_allcaps_roman_runs_joined_by_middle_dot` gate requires two maximal \
          ASCII-letter runs of at least two capitals joined directly by U+00B7, with \
          non-alphanumeric outer boundaries. It records shapes such as `AI·SW` without assigning \
-         prose, mathematics, or science semantics.\n\n",
+         prose, mathematics, or science semantics. The \
+         `korean_inline_parenthesized_single_arithmetic_operator` gate requires an immediate \
+         `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
+         traits, it also locates the current engine's emitted structure and counts a mismatch as \
+         signature-local only when the sentence's first differing cell falls inside that output \
+         range.\n\n",
     );
     text.push_str(
         "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
@@ -1166,6 +1286,15 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.candidates,
             stats.candidates - pending
         ));
+        if stats.output_signature_mismatches_evaluated > 0 {
+            text.push_str(&format!(
+                "For this output-signature audit, {} mismatches were evaluable and {} have their \
+                 first differing cell inside the detected structure's current-engine output \
+                 range. The remaining mismatches are controls against causal over-attribution.\n\n",
+                stats.output_signature_mismatches_evaluated,
+                stats.first_difference_in_output_signature
+            ));
+        }
         text.push_str("Mismatch primary-class distribution:\n\n");
         for (primary, count) in &stats.mismatch_primary_classes {
             text.push_str(&format!("- `{primary}`: {count}\n"));
@@ -1229,6 +1358,13 @@ fn markdown(report: &AnalysisReport) -> String {
          and no engine rule is inferred from their references. Representative samples are \
          sentence-level evidence: when the reported first difference precedes the detected \
          middle-dot span, the cohort must not be treated as the cause of that mismatch.\n\n\
+         The inline parenthesized-operator cohort has an independently checkable spacing boundary. \
+         Hangeul rule 46 inserts spaces only when an operation or comparison sign is between \
+         Korean text, while the literal parentheses intervene in this gate. Hangeul rule 49 says \
+         punctuation spacing follows the print, and science rule 21 prints and brailles `(-)` and \
+         `(+)` with no spaces inside the parentheses. The output-signature count is therefore the \
+         implementation-candidate subset; mere sentence-level coexistence is retained only as a \
+         control.\n\n\
          Corpus contradictions remain a separate gate: identical inputs with conflicting \
          references are classified as `corpus_suspect` before these cohorts are recorded and \
          would appear explicitly in each mismatch primary-class distribution. Their absence does \
@@ -1285,6 +1421,27 @@ fn markdown(report: &AnalysisReport) -> String {
              This cross-cutting cohort preserves every primary class and is not an engine routing \
              rule.\n",
             stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(KOREAN_INLINE_PARENTHESIZED_OPERATOR)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent inline parenthesized-operator measurement: {} candidates, {} exact \
+             controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
+             subcluster, and {}/{} evaluable mismatches whose first differing cell is inside the \
+             emitted structure. Primary classes are preserved.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
         ));
     }
 
@@ -1782,6 +1939,39 @@ mod tests {
     #[case::alphanumeric_boundary("1AI·SW2", false)]
     fn detects_allcaps_roman_middle_dot_runs(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_allcaps_roman_middle_dot_runs(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::plus("양(+)극", vec!['+'])]
+    #[case::hyphen_minus("음(-)극", vec!['-'])]
+    #[case::unicode_minus("음(−)극", vec!['−'])]
+    #[case::times("항(×)목", vec!['×'])]
+    #[case::division("항(÷)목", vec!['÷'])]
+    #[case::equals("항(=)목", vec!['='])]
+    #[case::standalone("(+) 전극", vec![])]
+    #[case::space_inside("양( + )극", vec![])]
+    fn detects_inline_parenthesized_operators(
+        #[case] input: &str,
+        #[case] expected_operators: Vec<char>,
+    ) {
+        assert_eq!(
+            inline_parenthesized_operators(input)
+                .into_iter()
+                .map(|candidate| candidate.operator)
+                .collect::<Vec<_>>(),
+            expected_operators
+        );
+    }
+
+    #[test]
+    fn locates_current_engine_parenthesized_operator_output() {
+        let input = "양(+)극";
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = inline_parenthesized_operator_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
     }
 
     #[test]
