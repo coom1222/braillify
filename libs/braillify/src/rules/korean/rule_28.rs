@@ -11,7 +11,7 @@ use crate::char_struct::CharType;
 use crate::rules::RuleMeta;
 use crate::rules::context::RuleContext;
 use crate::rules::english_ueb::korean_context::KoreanPrefixInput;
-use crate::rules::english_ueb::span::encode_korean_unit;
+use crate::rules::english_ueb::span::{encode_korean_unit, encode_korean_word};
 use crate::rules::traits::{BrailleRule, Phase, RuleResult};
 
 pub static META: RuleMeta = RuleMeta {
@@ -88,6 +88,81 @@ impl BrailleRule for Rule28 {
             }
         }
 
+        // 제37항: a Roman section in Korean text spells the word with UEB
+        // alphabet signs and multi-letter groupsigns, while suppressing UEB
+        // whole-word contractions. Encode each contiguous ASCII letter run in
+        // one pass so the shared UEB preference/morphology algorithm can choose
+        // contractions across the whole word. Apostrophe continuations retain
+        // the legacy position-aware path because they are not fresh word starts.
+        let starts_ascii_run = c.is_ascii_alphabetic()
+            && ctx
+                .index
+                .checked_sub(1)
+                .and_then(|index| ctx.word_chars.get(index))
+                .is_none_or(|previous| !previous.is_ascii_alphabetic());
+        let follows_apostrophe = ctx
+            .index
+            .checked_sub(1)
+            .and_then(|index| ctx.word_chars.get(index))
+            .is_some_and(|previous| matches!(previous, '\'' | '\u{2019}'));
+        if starts_ascii_run && !follows_apostrophe {
+            let run_end = ctx.index
+                + ctx.word_chars[ctx.index..]
+                    .iter()
+                    .take_while(|ch| ch.is_ascii_alphabetic())
+                    .count();
+            let run = &ctx.word_chars[ctx.index..run_end];
+            let caps_already_emitted =
+                ctx.is_all_uppercase && ctx.word_len() >= 2 && ctx.ascii_starts_at_beginning;
+            let is_whole_lowercase_word = ctx.index == 0
+                && run_end == ctx.word_chars.len()
+                && run.iter().all(|ch| ch.is_ascii_lowercase());
+            let prev_is_ascii_word = !ctx.prev_word.is_empty()
+                && ctx.prev_word.chars().all(|ch| ch.is_ascii_alphabetic());
+            let next_is_ascii_word = ctx.remaining_words.first().is_some_and(|word| {
+                !word.is_empty() && word.chars().all(|ch| ch.is_ascii_alphabetic())
+            });
+            // Rule 37's PDF example, "그는 Can you help me?라고 도움을 요청했다.",
+            // suppresses a whole-word sign for the first Roman word (`Can`) but retains
+            // the UEB wordsign for the phrase-interior `you`. The adjacent-ASCII-word
+            // gate models that structural position. Rule 39's "What is 김치 in English?"
+            // resumes the surrounding English passage after Korean, so the persistent
+            // English-dominant gate retains the resumed `in` wordsign. Neither gate
+            // depends on the example's literal words.
+            let standalone_wordsign = is_whole_lowercase_word
+                && (ctx.state.english_dominant_wrap_active
+                    || (prev_is_ascii_word && next_is_ascii_word));
+            let word_initial = ctx.index == 0
+                || ctx.word_chars.get(ctx.index - 1).is_some_and(|previous| {
+                    matches!(
+                        previous,
+                        '(' | '[' | '{' | '\u{2018}' | '\u{201c}' | '"' | '-'
+                    )
+                });
+            let digit_adjacent = ctx
+                .index
+                .checked_sub(1)
+                .and_then(|index| ctx.word_chars.get(index))
+                .is_some_and(|ch| ch.is_ascii_digit())
+                || ctx
+                    .word_chars
+                    .get(run_end)
+                    .is_some_and(|ch| ch.is_ascii_digit());
+            if let Some(cells) = encode_korean_word(
+                run,
+                caps_already_emitted,
+                standalone_wordsign,
+                word_initial,
+                digit_adjacent,
+            ) {
+                ctx.emit_slice(&cells);
+                *ctx.skip_count = run.len().saturating_sub(1);
+                ctx.state.is_english = true;
+                ctx.state.needs_english_continuation = false;
+                return Ok(RuleResult::Consumed);
+            }
+        }
+
         // Uppercase indicators (single/consecutive uppercase run)
         if (!ctx.is_all_uppercase || ctx.word_len() < 2 || !ctx.ascii_starts_at_beginning)
             && !ctx.state.is_big_english
@@ -139,7 +214,9 @@ impl BrailleRule for Rule28 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::context::EncodingMode;
     use crate::unicode::decode_unicode;
+    use crate::{EncodeOptions, encode_with_options};
 
     /// 제28항 — 영문자 점역. 소문자/대문자 모두 동일 점형으로 인코딩.
     #[rstest::rstest]
@@ -171,6 +248,37 @@ mod tests {
         #[case] expected: &[u8],
     ) {
         assert_eq!(uppercase_indicators(single, is_word, run), expected);
+    }
+
+    /// 제37항 PDF examples: Korean-context Roman words suppress whole-word
+    /// contractions while retaining their applicable multi-letter groupsigns.
+    #[rstest::rstest]
+    #[case::initial_letter_groupsign("every", &[52, 16, 17, 61, 50])]
+    #[case::lower_and_strong_groupsigns("enough", &[52, 34, 51, 35, 50])]
+    #[case::strong_contraction_inside_word("rather", &[52, 23, 1, 46, 23, 50])]
+    #[case::entry_lower_wordsign_spelled_as_letters("in", &[52, 10, 29, 50])]
+    fn korean_roman_words_share_ueb_groupsign_algorithm(
+        #[case] input: &str,
+        #[case] expected: &[u8],
+    ) {
+        let options = EncodeOptions {
+            default_mode: Some(EncodingMode::Korean),
+        };
+        assert_eq!(encode_with_options(input, &options).unwrap(), expected);
+    }
+
+    #[test]
+    fn english_dominant_wrap_resumes_ueb_wordsigns_after_korean_span() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("in", true);
+        owned.state.is_english = true;
+        owned.state.english_dominant_wrap_active = true;
+        let mut ctx = owned.ctx_at(0);
+
+        assert!(matches!(
+            Rule28.apply(&mut ctx).unwrap(),
+            RuleResult::Consumed
+        ));
+        assert_eq!(owned.result, vec![20]);
     }
 
     #[test]

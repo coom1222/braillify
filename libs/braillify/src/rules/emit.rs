@@ -88,6 +88,60 @@ fn token_is_math_word(token: Option<&Token<'_>>) -> bool {
     }
 }
 
+/// Find the word governed by a run of UEB grade-1/capital mode markers.
+///
+/// Korean rule 29 requires the roman indicator before the roman text, while
+/// rule 28 appendix places UEB capitalization indicators immediately before
+/// the capitalized roman word. Token rewriting may discover capitalization
+/// before the character emitter discovers a new roman section, so the emitter
+/// must establish roman mode before it emits these UEB prefix markers.
+fn roman_word_after_prefix<'a>(
+    tokens: &'a [Token<'a>],
+    prefix_index: usize,
+) -> Option<&'a WordToken<'a>> {
+    for token in tokens.iter().skip(prefix_index + 1) {
+        match token {
+            Token::Mode(
+                ModeEvent::Grade1Indicator | ModeEvent::CapsWord | ModeEvent::CapsPassageStart,
+            ) => continue,
+            Token::Word(word) => return Some(word),
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn enter_roman_before_ueb_prefix(
+    tokens: &[Token<'_>],
+    prefix_index: usize,
+    event: ModeEvent,
+    state: &mut EncoderState,
+    result: &mut Vec<u8>,
+) {
+    let is_ueb_prefix = matches!(
+        event,
+        ModeEvent::Grade1Indicator | ModeEvent::CapsWord | ModeEvent::CapsPassageStart
+    );
+    let roman_word =
+        roman_word_after_prefix(tokens, prefix_index).filter(|word| word.meta.starts_with_ascii);
+
+    if is_ueb_prefix
+        && state.english_indicator
+        && !state.is_english
+        && let Some(word) = roman_word
+    {
+        // Use the shared rule-29/35 transition so a capital word after a number
+        // in the same roman section (`KBS 1 TV`) resumes without a second
+        // roman indicator, while a genuinely new section receives one.
+        roman_mode::enter_english_if_starting(
+            state,
+            &word.chars,
+            word.meta.has_ascii_alphabetic,
+            result,
+        );
+    }
+}
+
 /// PDF 수학 — `Word(math)+Space+Word(=/==/관계)+Space+Word(math)` 패턴에서
 /// 등호 양옆 Space 토큰을 묵음 처리한다. 점역 결과는 `expr⠒⠒expr`로 인접한다.
 fn is_math_operator_space_suppression<'a>(tokens: &'a [Token<'a>], space_idx: usize) -> bool {
@@ -170,7 +224,10 @@ pub fn emit(ir: &mut DocumentIR, char_engine: &mut RuleEngine) -> Result<Vec<u8>
                     result.push(0);
                 }
             }
-            Token::Mode(event) => emit_mode_event(*event, &mut ir.state, &mut result),
+            Token::Mode(event) => {
+                enter_roman_before_ueb_prefix(&ir.tokens, idx, *event, &mut ir.state, &mut result);
+                emit_mode_event(*event, &mut ir.state, &mut result);
+            }
             Token::Fraction(frac) => {
                 if let Some(ref w) = frac.whole {
                     result.extend(fraction::encode_mixed_fraction(
@@ -767,6 +824,61 @@ mod tests {
         let mut engine = make_char_engine();
         let out = emit(&mut ir, &mut engine).unwrap();
         assert_eq!(out, vec![52, 48, 32, 32, 32, 32, 32, 32, 4, 48]);
+    }
+
+    /// Korean rules 28 appendix and 29: in Korean prose the roman indicator
+    /// precedes the UEB capital-word indicator (`0,,KTX`, not `,,0KTX`).
+    #[test]
+    fn roman_indicator_precedes_capital_prefix_without_explicit_entry_token() {
+        let chars = "KTX".chars().collect::<Vec<_>>();
+        let mut ir = DocumentIR {
+            tokens: vec![
+                Token::Mode(ModeEvent::CapsWord),
+                Token::Word(WordToken {
+                    text: Cow::Borrowed("KTX"),
+                    chars: chars.clone(),
+                    meta: super::super::token::WordMeta::from_chars(&chars),
+                }),
+            ],
+            state: EncoderState::new(true),
+        };
+        let mut engine = make_char_engine();
+
+        let out = emit(&mut ir, &mut engine).unwrap();
+
+        assert!(out.starts_with(&[52, 32, 32]));
+    }
+
+    #[test]
+    fn explicit_roman_entry_is_not_duplicated_before_capital_prefix() {
+        let chars = "KTX".chars().collect::<Vec<_>>();
+        let mut ir = DocumentIR {
+            tokens: vec![
+                Token::Mode(ModeEvent::EnterEnglish),
+                Token::Mode(ModeEvent::CapsWord),
+                Token::Word(WordToken {
+                    text: Cow::Borrowed("KTX"),
+                    chars: chars.clone(),
+                    meta: super::super::token::WordMeta::from_chars(&chars),
+                }),
+            ],
+            state: EncoderState::new(true),
+        };
+        let mut engine = make_char_engine();
+
+        let out = emit(&mut ir, &mut engine).unwrap();
+
+        assert!(out.starts_with(&[52, 32, 32]));
+        assert_eq!(out.iter().filter(|byte| **byte == 52).count(), 1);
+    }
+
+    /// Korean rule 35 PDF example: numbers do not split a roman section, so
+    /// the later capital word resumes without another roman indicator.
+    #[test]
+    fn capital_prefix_after_roman_number_chain_does_not_reenter_roman_mode() {
+        let out = encode("KBS 1 TV 좀 켜 주세요.").unwrap();
+
+        assert_eq!(out.iter().filter(|byte| **byte == 52).count(), 1);
     }
 
     #[test]

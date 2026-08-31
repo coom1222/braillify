@@ -193,6 +193,59 @@ impl EnglishUebEngine {
         Self { contractions }
     }
 
+    /// Encode one Roman word embedded in Korean text according to Korean rule 37.
+    ///
+    /// At a rule-37 Roman entry, whole-word signs/shortforms are suppressed while
+    /// UEB multi-letter groupsigns remain. Subsequent standalone words and a
+    /// rule-39 return to English-dominant context may use wordsigns. Keeping both
+    /// paths on the same contraction engine makes rule 10 preference and
+    /// morphology gates identical. Roman mode transitions remain the Korean
+    /// engine's job.
+    pub(crate) fn encode_korean_word(
+        &self,
+        chars: &[char],
+        suppress_caps: bool,
+        standing_alone: bool,
+        word_initial: bool,
+        digit_adjacent: bool,
+    ) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        let lower: Vec<char> = chars.iter().flat_map(|ch| ch.to_lowercase()).collect();
+        let lower_word: String = lower.iter().collect();
+        if !standing_alone && super::rule_10_5::wordsign(&lower_word).is_some() {
+            if !suppress_caps {
+                match classify_caps(chars)? {
+                    Caps::None => {}
+                    Caps::Single => out.push(CAPITAL),
+                    Caps::Word => out.extend([CAPITAL, CAPITAL]),
+                }
+            }
+            out.extend(super::rule_10_9::encode_korean_groupsigns(
+                &lower,
+                &self.contractions,
+                word_initial,
+                word_initial,
+            )?);
+            return Some(out);
+        }
+        self.encode_word(
+            chars,
+            WordContext {
+                standing_alone,
+                upper_usable: standing_alone,
+                shortform_usable: false,
+                allow_longer_shortforms: false,
+                lower_usable: standing_alone,
+                suppress_caps,
+                word_initial,
+                restricted_prefix_boundary: word_initial,
+                digit_adjacent,
+            },
+            &mut out,
+        )?;
+        Some(out)
+    }
+
     /// Encode a token stream. Returns `None` if any token is unsupported
     /// (a number, a symbol, or a mixed-case word), so the legacy path — which
     /// handles those — takes over. `explicit_english` is true only under an

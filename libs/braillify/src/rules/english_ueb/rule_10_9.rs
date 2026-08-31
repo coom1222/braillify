@@ -77,6 +77,7 @@ pub fn encode_with_longer_shortforms(
         false,
         true,
         false,
+        false,
     )
 }
 
@@ -96,6 +97,30 @@ pub fn encode_with_optional_longer_shortforms(
         false,
         allow_longer_shortforms,
         false,
+        false,
+    )
+}
+
+/// Korean rule 37 word body: use UEB multi-letter groupsigns, but do not let a
+/// groupsign that is also a lower wordsign consume the entire first Roman word.
+/// This is a structural gate, not a word-output table: inner groupsigns such as
+/// `en` in `enough` remain available.
+pub(crate) fn encode_korean_groupsigns(
+    word: &[char],
+    contractions: &ContractionEngine,
+    suppress_initial_ing: bool,
+    restricted_prefix_boundary: bool,
+) -> Option<Vec<u8>> {
+    encode_with_constraints(
+        word,
+        contractions,
+        suppress_initial_ing,
+        restricted_prefix_boundary,
+        None,
+        false,
+        false,
+        false,
+        true,
     )
 }
 
@@ -119,6 +144,7 @@ pub fn encode_anglicised_word(
         false,
         true,
         true,
+        false,
     )
 }
 
@@ -159,6 +185,7 @@ pub fn encode_with_division(
             first_line_has_upper_prefix,
             true,
             false,
+            false,
         )?);
         return Some(out);
     }
@@ -170,6 +197,7 @@ pub fn encode_with_division(
         Some(division),
         first_line_has_upper_prefix,
         true,
+        false,
         false,
     )
 }
@@ -187,6 +215,7 @@ fn encode_with_constraints(
     first_line_has_upper_prefix: bool,
     allow_longer_shortforms: bool,
     relax_shortforms: bool,
+    suppress_whole_word_wordsign: bool,
 ) -> Option<Vec<u8>> {
     let n = word.len();
     // §10.11.1: a contraction must not bridge the seam of a compound word. Look up
@@ -240,6 +269,7 @@ fn encode_with_constraints(
             first_line_has_upper_prefix,
             allow_longer_shortforms,
             relax_shortforms,
+            suppress_whole_word_wordsign,
         ) {
             let next = pos + consumed;
             let total = cells.len() + cost[next];
@@ -294,6 +324,7 @@ fn candidate_moves(
     first_line_has_upper_prefix: bool,
     allow_longer_shortforms: bool,
     relax_shortforms: bool,
+    suppress_whole_word_wordsign: bool,
 ) -> Vec<(Vec<u8>, usize, u16)> {
     let mut moves = Vec::new();
     // §10.9 longer-word shortform placement (preferred on a cost tie → priority 0).
@@ -316,6 +347,17 @@ fn candidate_moves(
     }
     let protected_here = inside_protected[pos];
     for m in contractions.matches_at(word, pos) {
+        // Korean rule 37: immediately after the Roman indicator, a lower
+        // wordsign is written with alphabet/multi-letter groupsigns instead.
+        // Reject only a contraction consuming the complete wordsign; inner
+        // groupsigns remain candidates (`enough` keeps `en` and `gh`).
+        if suppress_whole_word_wordsign
+            && pos == 0
+            && m.consumed == word.len()
+            && super::rule_10_5::wordsign(&word.iter().collect::<String>()).is_some()
+        {
+            continue;
+        }
         // §10.11.1: a GROUPSIGN must not bridge a compound-word seam —
         // `an[t·h]ill`, `cart[·h]orse`, `nor[the]ast` spell the bridging digraph
         // out. An initial-letter contraction (§10.7 `upon`, priority 55) and a
@@ -854,6 +896,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
         assert!(moves.iter().all(|(cells, consumed, _)| {
             *consumed != pattern.len() || cells != &vec![decode_unicode('⠆')]
@@ -979,6 +1022,7 @@ mod tests {
             &vec![false; word.len()],
             &[],
             None,
+            false,
             false,
             false,
             false,
@@ -1175,6 +1219,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
         assert!(moves.iter().any(|(cells_, consumed, priority)| {
             *cells_ == cells("⠼⠮") && *consumed == 1 && *priority == u16::MAX
@@ -1195,6 +1240,7 @@ mod tests {
             None,
             false,
             true,
+            false,
             false,
         );
         assert_eq!(result, None);
