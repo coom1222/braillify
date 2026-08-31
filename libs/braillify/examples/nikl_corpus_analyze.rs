@@ -1027,6 +1027,28 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     text.push('\n');
 
+    text.push_str("## Rules 34/54 Korean-prefixed Roman annotations\n\n");
+    text.push_str(
+        "Rule 34 says that when Roman text is enclosed by quotation marks or brackets, the \
+         Roman terminator is omitted; its PDF example is `링컨(Lincoln)은 미국의 제16대 \
+         대통령이다.` Rule 54 says that text immediately after an opening bracket and \
+         immediately before a closing bracket is attached. Together these establish the \
+         Korean-prefix + closed-Roman-annotation context independently of corpus expected \
+         values. A following comma or period is outside the already closed annotation and \
+         must not cause its Roman contents to be rerouted as mathematics.\n\n\
+         The implementation gate exists only inside `split_mixed_math_word`, after the prefix \
+         has been proved entirely Korean. It accepts a fully closed parenthesized Roman word \
+         (including ASCII digits such as `O4O`) plus ordinary trailing prose punctuation. \
+         The global math detector is byte-for-byte unchanged; regression tests preserve its \
+         existing standalone results for `(x)`, `(A)`, and `(abc)`, while explicit forms such \
+         as `(x+1)`, `(a/b)`, and `(x₁)` remain math candidates.\n\n\
+         Against the immediately preceding 63,399-exact run, exact matches increased by 2,092. \
+         The observable primary totals changed as follows: `comparison_method` 290→303, \
+         `pending_rule_review` 19,636→17,543, and `unsupported_character_review` 203→191. \
+         Raw encoding errors stayed at 450; errors resolved by a comparison method changed \
+         247→259 and unresolved review errors changed 203→191.\n\n",
+    );
+
     text.push_str("## Rule evidence and change log\n\n");
     text.push_str(
         "| Stage | Standard cases | Corpus exact | Corpus accuracy | Evidence |\n\
@@ -1040,6 +1062,9 @@ fn markdown(report: &AnalysisReport) -> String {
     );
     text.push_str(
         "| Rule 36 Unicode Roman-numeral presentation normalization | 5,141/5,141 | 63,399/83,528 | 75.90% | U+2160–U+217F use the corresponding Roman-letter spelling; 11 NFKC-equivalent observations became exact, 23 errors became encoded mismatches pending review, and 3 remain blocked by `㈜` |\n",
+    );
+    text.push_str(
+        "| Rules 34/54 Korean-prefixed closed Roman annotation routing | 5,141/5,141 | 65,491/83,528 | 78.41% | A fully closed Roman annotation after an all-Korean prefix stays on the prose encoder path, including attached comma/period and alphanumeric forms such as `O4O`; exact matches increased by 2,092 while the global math detector remained unchanged |\n",
     );
     text.push_str(
         "\nEngine changes must add a row only after both the 5,141-case standard suite and \

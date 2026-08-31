@@ -345,6 +345,36 @@ fn build_korean_prefix_math_suffix(prefix: String, bytes: Vec<u8>) -> Vec<Token<
     vec![head, sep, math]
 }
 
+/// Recognize only the suffix shape used after an already-confirmed Korean
+/// prefix.  Korean rule 34's PDF example is `링컨(Lincoln)은`: Roman text may
+/// be enclosed in a bracket without a Roman terminator.  Rule 54 requires the
+/// bracket to attach to its contents, so a comma or period after the closing
+/// bracket does not turn that Roman annotation into mathematics.
+///
+/// This predicate is intentionally not part of the global math detector, whose
+/// existing results for standalone `(x)`, `(A)`, and `(abc)` stay unchanged.
+/// The caller below must first prove that all preceding characters are Korean.
+fn is_closed_roman_annotation_suffix(chars: &[char]) -> bool {
+    if chars.first() != Some(&'(') {
+        return false;
+    }
+
+    let Some(close) = chars.iter().position(|c| *c == ')') else {
+        return false;
+    };
+    let body = &chars[1..close];
+    let trailing = &chars[close + 1..];
+
+    !body.is_empty()
+        && body.iter().any(|c| c.is_ascii_alphabetic())
+        && body
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '\'' | '.'))
+        && trailing
+            .iter()
+            .all(|c| matches!(*c, ',' | '.' | ';' | ':' | '!' | '?' | '\'' | '"'))
+}
+
 pub(super) fn split_mixed_math_word(
     word: &crate::rules::token::WordToken<'_>,
     leading_delimiter_len: usize,
@@ -389,6 +419,9 @@ pub(super) fn split_mixed_math_word(
         let prefix_all_korean = prefix_chars.iter().all(|c| is_korean_char(*c));
         let suffix_no_korean = !suffix_chars.iter().any(|c| is_korean_char(*c));
         if !prefix_all_korean || !suffix_no_korean {
+            return None;
+        }
+        if is_closed_roman_annotation_suffix(suffix_chars) {
             return None;
         }
         let suffix_text: String = suffix_chars.iter().collect();

@@ -72,6 +72,73 @@ mod tests {
         assert!(!is_math_expression(&chars, "hello"));
     }
 
+    #[rstest::rstest]
+    #[case::lower_list_item("(x)", false)]
+    #[case::upper_list_item("(A)", false)]
+    #[case::plain_parenthesized_word("(abc)", false)]
+    fn standalone_parenthesized_inputs_keep_baseline_detector_result(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        let chars: Vec<char> = input.chars().collect();
+        assert_eq!(is_math_expression(&chars, input), expected, "input={input}");
+    }
+
+    #[rstest::rstest]
+    #[case::addition("(x+1)")]
+    #[case::fraction("(a/b)")]
+    #[case::subscript("(x₁)")]
+    fn parenthesized_explicit_expressions_keep_existing_math_result(#[case] input: &str) {
+        let chars: Vec<char> = input.chars().collect();
+        assert!(is_math_expression(&chars, input));
+    }
+
+    #[test]
+    fn rule_34_bare_roman_parenthesis_has_exact_particle_suffix() {
+        let bare = crate::encode("링컨(Lincoln)").expect("bare rule 34 form must encode");
+        let attached =
+            crate::encode("링컨(Lincoln)은").expect("particle-attached rule 34 form must encode");
+        let particle = crate::encode("은").expect("particle must encode");
+
+        assert_eq!(
+            attached.strip_prefix(bare.as_slice()),
+            Some(particle.as_slice())
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::comma("링컨(Lincoln)", "링컨(Lincoln),", ",")]
+    #[case::period("링컨(Lincoln)", "링컨(Lincoln).", ".")]
+    fn rule_54_punctuation_follows_closed_roman_parenthesis_without_resplitting(
+        #[case] bare_input: &str,
+        #[case] with_punctuation: &str,
+        #[case] punctuation: &str,
+    ) {
+        let bare = crate::encode(bare_input).expect("bare rule 34 form must encode");
+        let punctuated =
+            crate::encode(with_punctuation).expect("punctuated rule 54 form must encode");
+        let punctuation = crate::encode(punctuation).expect("punctuation must encode");
+
+        assert_eq!(
+            punctuated.strip_prefix(bare.as_slice()),
+            Some(punctuation.as_slice())
+        );
+    }
+
+    #[test]
+    fn rule_34_alphanumeric_o4o_uses_the_same_bare_and_particle_path() {
+        let bare = crate::encode("표기(O4O)").expect("alphanumeric Roman form must encode");
+        let attached =
+            crate::encode("표기(O4O)는").expect("particle-attached Roman form must encode");
+        let particle = crate::encode("는").expect("particle must encode");
+
+        assert_eq!(
+            attached.strip_prefix(bare.as_slice()),
+            Some(particle.as_slice())
+        );
+        assert!(!bare.windows(2).any(|cells| cells == [0, 0]));
+    }
+
     #[test]
     fn test_is_math_with_superscript() {
         let chars: Vec<char> = "x²".chars().collect();
@@ -206,6 +273,21 @@ mod tests {
         };
 
         assert!(split_mixed_math_word(&word, 2, MathContext::default()).is_none());
+    }
+
+    #[rstest::rstest]
+    #[case::rule_34_particle("링컨(Lincoln)은")]
+    #[case::rule_54_comma("링컨(Lincoln),")]
+    #[case::alphanumeric_roman("표기(O4O).")]
+    fn split_mixed_math_word_keeps_korean_prefixed_closed_roman_annotation(#[case] input: &str) {
+        let chars: Vec<char> = input.chars().collect();
+        let word = crate::rules::token::WordToken {
+            text: Cow::Borrowed(input),
+            chars: chars.clone(),
+            meta: WordMeta::from_chars(&chars),
+        };
+
+        assert!(split_mixed_math_word(&word, 0, MathContext::default()).is_none());
     }
 
     fn enc(input: &str) -> Vec<u8> {
