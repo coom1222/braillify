@@ -79,6 +79,13 @@ struct ShardStats {
 }
 
 #[derive(Debug, Serialize)]
+struct ErrorCharacterStats {
+    cases: usize,
+    nfkc: String,
+    family: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct AnalysisReport {
     corpus: &'static str,
     total: usize,
@@ -90,7 +97,8 @@ struct AnalysisReport {
     primary_classes: BTreeMap<String, usize>,
     reasons: BTreeMap<String, usize>,
     encoding_error_messages: BTreeMap<String, usize>,
-    singleton_error_characters: BTreeMap<String, usize>,
+    encoding_error_families: BTreeMap<String, usize>,
+    singleton_error_characters: BTreeMap<String, ErrorCharacterStats>,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -382,6 +390,58 @@ fn excerpt_pair(expected: &str, actual: &str) -> (String, String) {
     (expected_excerpt, actual_excerpt)
 }
 
+fn is_compatibility_unit_decomposition(ch: char, nfkc: &str) -> bool {
+    matches!(
+        ch as u32,
+        0x3371..=0x337a
+            | 0x3380..=0x33c6
+            | 0x33c8..=0x33cc
+            | 0x33ce..=0x33d0
+            | 0x33d3..=0x33d9
+            | 0x33db..=0x33df
+            | 0x33ff
+    ) && nfkc.chars().any(|part| part.is_ascii_alphabetic())
+        && nfkc.chars().all(|part| {
+            part.is_ascii_alphabetic()
+                || matches!(part, '2' | '3' | '/' | '\u{2044}' | '\u{2215}' | 'μ')
+        })
+}
+
+fn encoding_error_family(ch: char) -> &'static str {
+    let nfkc = ch.to_string().nfkc().collect::<String>();
+    if is_compatibility_unit_decomposition(ch, &nfkc) {
+        "compatibility_unit_symbol"
+    } else if (0x2160..=0x217f).contains(&(ch as u32))
+        && nfkc.chars().all(|part| {
+            matches!(
+                part.to_ascii_uppercase(),
+                'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'
+            )
+        })
+    {
+        "roman_numeral_presentation"
+    } else if matches!(ch, '\u{3214}' | '\u{321c}') {
+        "enclosed_organization_mark"
+    } else if ch == '\u{2113}' {
+        "letterlike_unit_symbol"
+    } else if matches!(
+        ch,
+        '\u{02d1}'
+            | '\u{2025}'
+            | '\u{2502}'
+            | '\u{25b2}'
+            | '\u{25b4}'
+            | '\u{260f}'
+            | '\u{2665}'
+            | '\u{2e31}'
+            | '\u{302e}'
+    ) {
+        "punctuation_or_layout_symbol"
+    } else {
+        "other_unsupported_symbol"
+    }
+}
+
 fn analyze(
     cases: Vec<LocatedCase>,
     encoded: Vec<EncodedCase>,
@@ -391,7 +451,8 @@ fn analyze(
     let mut primary_classes = BTreeMap::new();
     let mut reasons = BTreeMap::new();
     let mut encoding_error_messages = BTreeMap::new();
-    let mut singleton_error_characters = BTreeMap::new();
+    let mut encoding_error_families = BTreeMap::new();
+    let mut singleton_error_characters = BTreeMap::<String, ErrorCharacterStats>::new();
     let mut singleton_error_cache = BTreeMap::<char, bool>::new();
     let mut traits = BTreeMap::new();
     let mut shards = BTreeMap::<String, ShardStats>::new();
@@ -419,14 +480,29 @@ fn analyze(
         {
             *encoding_error_messages.entry(error.clone()).or_insert(0) += 1;
             let unique_chars = input.chars().collect::<BTreeSet<_>>();
+            let mut case_families = BTreeSet::new();
             for ch in unique_chars {
                 let fails_alone = *singleton_error_cache
                     .entry(ch)
                     .or_insert_with(|| braillify::encode_to_unicode(&ch.to_string()).is_err());
                 if fails_alone {
                     let key = format!("U+{:04X} {ch}", ch as u32);
-                    *singleton_error_characters.entry(key).or_insert(0) += 1;
+                    let family = encoding_error_family(ch);
+                    case_families.insert(family);
+                    singleton_error_characters
+                        .entry(key)
+                        .and_modify(|stats| stats.cases += 1)
+                        .or_insert_with(|| ErrorCharacterStats {
+                            cases: 1,
+                            nfkc: ch.to_string().nfkc().collect(),
+                            family,
+                        });
                 }
+            }
+            for family in case_families {
+                *encoding_error_families
+                    .entry(family.to_string())
+                    .or_insert(0) += 1;
             }
         }
         for (name, present) in [
@@ -485,6 +561,7 @@ fn analyze(
         primary_classes,
         reasons,
         encoding_error_messages,
+        encoding_error_families,
         singleton_error_characters,
         overlapping_traits: traits,
         shards,
@@ -545,9 +622,26 @@ fn markdown(report: &AnalysisReport) -> String {
     for (name, count) in &report.encoding_error_messages {
         text.push_str(&format!("| `{name}` | {count} |\n"));
     }
-    text.push_str("\n| Singleton error character | Cases containing it |\n|---|---:|\n");
-    for (name, count) in &report.singleton_error_characters {
+    text.push_str("\n| Error family | Cases |\n|---|---:|\n");
+    for (name, count) in &report.encoding_error_families {
         text.push_str(&format!("| `{name}` | {count} |\n"));
+    }
+    text.push_str(
+        "\nFamilies are diagnostics, not automatic normalization permissions. \
+         Rules 68/69 compatibility-unit support removed that error family from the current run; \
+         `enclosed_organization_mark` and layout symbols still have no confirmed rule.\n\n",
+    );
+    text.push_str(
+        "| Singleton error character | Cases containing it | NFKC decomposition | Family |\n\
+         |---|---:|---|---|\n",
+    );
+    for (name, stats) in &report.singleton_error_characters {
+        text.push_str(&format!(
+            "| `{name}` | {} | `{}` | `{}` |\n",
+            stats.cases,
+            stats.nfkc.replace('`', "\\`"),
+            stats.family
+        ));
     }
 
     text.push_str("\n## Shards\n\n| Shard | Exact | Total | Accuracy |\n|---|---:|---:|---:|\n");
@@ -598,6 +692,17 @@ fn markdown(report: &AnalysisReport) -> String {
          wordsign for the resumed `in`, instead of treating it as a fresh rule 37 entry word.\n\n",
     );
 
+    text.push_str("## Rule 69 compatibility-unit scope\n\n");
+    text.push_str(
+        "The engine accepts 96 scientific/measurement glyphs from Unicode CJK Compatibility, \
+         derives their Roman spelling with NFKC, and applies rules 68/69 rather than whole-word \
+         UEB. The accepted glyph set and panic-free encoding property are fixed by inline tests. \
+         The official Unicode names distinguish `U+337A ㍺` SQUARE IU (accepted) from \
+         `U+33D1 ㏑` SQUARE LN, `U+33D2 ㏒` SQUARE LOG, and `U+33DA ㏚` SQUARE PR \
+         (not units, rejected). See the \
+         [Unicode CJK Compatibility names list](https://www.unicode.org/charts/nameslist/n_3300.html).\n\n",
+    );
+
     text.push_str("## Rule evidence and change log\n\n");
     text.push_str(
         "| Stage | Standard cases | Corpus exact | Corpus accuracy | Evidence |\n\
@@ -605,6 +710,9 @@ fn markdown(report: &AnalysisReport) -> String {
          | Parent commit `3cfeae0` | 5,141/5,141 | 57,732/83,528 | 69.12% | Reproduced with release tests |\n\
          | Rules 28/29 indicator ordering | 5,141/5,141 | 61,652/83,528 | 73.81% | Roman indicator now precedes UEB grade-1/capital indicators; rule 35 roman-number continuity retained |\n\
          | Rules 37/39 shared UEB groupsign algorithm | 5,141/5,141 | 63,239/83,528 | 75.71% | Korean Roman sections reuse UEB preference/morphology rules; entry wordsigns and English-dominant resume are state-gated |\n",
+    );
+    text.push_str(
+        "| Rules 68/69 compatibility unit algorithm | 5,141/5,141 | 63,388/83,528 | 75.89% | 96 Unicode unit presentation forms use one decomposition/letter-run/attachment algorithm; encoding errors fell from 434 to 226 |\n",
     );
     text.push_str(
         "\nEngine changes must add a row only after both the 5,141-case standard suite and \
@@ -667,6 +775,16 @@ mod tests {
             Some(expected) => assert!(result.unwrap_err().contains(expected)),
             None => assert_eq!(result, Ok(())),
         }
+    }
+
+    #[rstest::rstest]
+    #[case::compatibility_unit('㎏', "compatibility_unit_symbol")]
+    #[case::roman_numeral('Ⅱ', "roman_numeral_presentation")]
+    #[case::company_mark('㈜', "enclosed_organization_mark")]
+    #[case::layout_symbol('▲', "punctuation_or_layout_symbol")]
+    #[case::non_unit_square_log('㏒', "other_unsupported_symbol")]
+    fn clusters_encoding_error_characters(#[case] input: char, #[case] expected_family: &str) {
+        assert_eq!(encoding_error_family(input), expected_family);
     }
 
     #[test]

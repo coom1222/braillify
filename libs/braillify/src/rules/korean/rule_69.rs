@@ -1,8 +1,10 @@
 use crate::char_struct::CharType;
 use crate::rules::RuleMeta;
 use crate::rules::context::RuleContext;
+use crate::rules::english_ueb::span::encode_korean_word;
 use crate::rules::korean::rule_29::{ENGLISH_CONTINUATION, ROMAN_INDICATOR};
 use crate::rules::traits::{BrailleRule, Phase, RuleResult};
+use unicode_normalization::UnicodeNormalization;
 
 pub static META: RuleMeta = RuleMeta {
     section: "69",
@@ -13,11 +15,6 @@ pub static META: RuleMeta = RuleMeta {
 };
 
 const SINGLE_MAPPINGS: &[(char, &str)] = &[
-    ('㎎', "⠴⠍⠛"),
-    ('㎗', "⠙⠇⠲"),
-    ('㎠', "⠉⠍⠘⠼⠃"),
-    ('㎞', "⠴⠅⠍⠲"),
-    ('㎒', "⠴⠠⠍⠠⠓⠵⠲"),
     ('Ω', "⠴⠠⠨⠺⠲"),
     ('%', "⠴⠏"),
     ('‰', "⠴⠏⠍"),
@@ -52,8 +49,132 @@ fn encode_unicode_cells(unicode: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Unicode's CJK compatibility block contains square presentation forms for
+/// Roman unit symbols (`㎏` → `kg`, `㎓` → `GHz`, `㎥` → `m3`). Rules 68/69
+/// define the transcription from the semantic Roman unit, so recognize the
+/// whole Unicode family from its compatibility decomposition instead of adding
+/// one input-specific mapping per glyph. Japanese square words and other CJK
+/// compatibility characters are rejected by the component grammar.
+fn compatibility_unit_decomposition(c: char) -> Option<Vec<char>> {
+    // Unicode CJK Compatibility contains non-unit square abbreviations too
+    // (`㏑` ln, `㏒` log, `㏚` PR). Keep the accepted ranges to scientific and
+    // measurement symbols; the component grammar is an additional guard, not
+    // the sole evidence that a square abbreviation is a unit.
+    let is_unit_codepoint = matches!(
+        c as u32,
+        0x3371..=0x337a
+            | 0x3380..=0x33c6
+            | 0x33c8..=0x33cc
+            | 0x33ce..=0x33d0
+            | 0x33d3..=0x33d9
+            | 0x33db..=0x33df
+            | 0x33ff
+    );
+    if !is_unit_codepoint || super::rule_68::is_rule_68_symbol(c) {
+        return None;
+    }
+    let parts = c.to_string().nfkc().collect::<Vec<_>>();
+    (parts.iter().any(|part| part.is_ascii_alphabetic())
+        && parts.iter().all(|part| {
+            part.is_ascii_alphabetic()
+                || matches!(part, '2' | '3' | '/' | '\u{2044}' | '\u{2215}' | 'μ')
+        }))
+    .then_some(parts)
+}
+
+/// Rule 69 delegates only to rule 37's multi-letter groupsigns. This is not
+/// ordinary UEB word encoding: whole-word signs and shortforms are disabled,
+/// and a lower groupsign cannot consume the whole entry run (`in` is spelled
+/// `i`-`n`, while the same `in` may contract inside `min`).
+fn encode_rule_69_unit_letters(letters: &[char]) -> Result<Vec<u8>, String> {
+    encode_korean_word(letters, false, false, true, false).ok_or_else(|| {
+        format!(
+            "cannot encode rule 69 Roman unit letters: {}",
+            letters.iter().collect::<String>()
+        )
+    })
+}
+
+fn encode_compatibility_unit(
+    parts: &[char],
+    needs_roman_indicator: bool,
+    needs_roman_terminator: bool,
+) -> Result<Vec<u8>, String> {
+    let mut encoded = Vec::new();
+    if needs_roman_indicator {
+        encoded.push(ROMAN_INDICATOR);
+    }
+
+    let mut index = 0usize;
+    while index < parts.len() {
+        match parts[index] {
+            'μ' => {
+                encoded.extend(encode_unicode_cells("⠨⠍"));
+                index += 1;
+            }
+            '2' | '3' => {
+                encoded.extend(encode_unicode_cells("⠘⠼"));
+                encoded.push(crate::number::encode_number(parts[index])?);
+                index += 1;
+            }
+            '/' | '\u{2044}' | '\u{2215}' => {
+                encoded.extend(encode_unicode_cells("⠸⠌"));
+                index += 1;
+            }
+            ch if ch.is_ascii_alphabetic() => {
+                let end = index
+                    + parts[index..]
+                        .iter()
+                        .take_while(|part| part.is_ascii_alphabetic())
+                        .count();
+                let letters = &parts[index..end];
+                let unit = encode_rule_69_unit_letters(letters)?;
+                encoded.extend(unit);
+                index = end;
+            }
+            unsupported => {
+                return Err(format!(
+                    "unsupported compatibility unit component: U+{:04X}",
+                    unsupported as u32
+                ));
+            }
+        }
+    }
+
+    // Rule 68's superscript closes the compact unit without a Roman terminator
+    // (`㎡` → `0m^#b`). Otherwise rule 69 terminates the Roman unit unless the
+    // same Roman unit chain continues through a slash.
+    if needs_roman_terminator && !matches!(parts.last(), Some('2' | '3')) {
+        encoded.push(crate::unicode::decode_unicode('⠲'));
+    }
+    Ok(encoded)
+}
+
+fn is_roman_unit_component(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == 'μ' || compatibility_unit_decomposition(ch).is_some()
+}
+
+fn roman_unit_chain_continues_before(ctx: &RuleContext) -> bool {
+    ctx.index >= 2
+        && ctx.word_chars.get(ctx.index - 1) == Some(&'/')
+        && ctx
+            .word_chars
+            .get(ctx.index - 2)
+            .is_some_and(|previous| is_roman_unit_component(*previous))
+}
+
+fn roman_unit_chain_continues_after(ctx: &RuleContext) -> bool {
+    ctx.word_chars.get(ctx.index + 1) == Some(&'/')
+        && ctx
+            .word_chars
+            .get(ctx.index + 2)
+            .is_some_and(|next| is_roman_unit_component(*next))
+}
+
 pub fn is_rule_69_symbol(c: char) -> bool {
-    SINGLE_MAPPINGS.iter().any(|(candidate, _)| *candidate == c) || c == 'μ'
+    SINGLE_MAPPINGS.iter().any(|(candidate, _)| *candidate == c)
+        || c == 'μ'
+        || compatibility_unit_decomposition(c).is_some()
 }
 
 fn is_numeric_or_unit_context(ctx: &RuleContext) -> bool {
@@ -256,6 +377,17 @@ impl BrailleRule for Rule69 {
             return Ok(RuleResult::Consumed);
         }
 
+        if let Some(parts) = compatibility_unit_decomposition(ctx.current_char()) {
+            let continues_from_previous = roman_unit_chain_continues_before(ctx);
+            let continues_after = roman_unit_chain_continues_after(ctx);
+            let encoded =
+                encode_compatibility_unit(&parts, !continues_from_previous, !continues_after)?;
+            ctx.emit_slice(&encoded);
+            ctx.state.is_english = false;
+            ctx.state.needs_english_continuation = false;
+            return Ok(RuleResult::Consumed);
+        }
+
         // `matches()` guard `is_rule_69_symbol(c)` is a `SINGLE_MAPPINGS` lookup,
         // so reaching here without the prior μ/ASCII-unit/`%`-shortcut paths
         // means the char is guaranteed to be in `SINGLE_MAPPINGS`.
@@ -275,7 +407,8 @@ impl BrailleRule for Rule69 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Rule69, encode_ascii_unit, encode_percent_abbreviation, parse_numeric_ascii_unit_prefix,
+        Rule69, compatibility_unit_decomposition, encode_ascii_unit, encode_compatibility_unit,
+        encode_percent_abbreviation, encode_rule_69_unit_letters, parse_numeric_ascii_unit_prefix,
         word_looks_like_unit_chain,
     };
 
@@ -288,6 +421,124 @@ mod tests {
         let chars: Vec<char> = input.chars().collect();
 
         assert_eq!(word_looks_like_unit_chain(&chars), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::kilogram('㎏', "kg")]
+    #[case::gigahertz('㎓', "GHz")]
+    #[case::cubic_metre('㎥', "m3")]
+    #[case::metres_per_second('㎧', "m∕s")]
+    #[case::milliwatt('㎽', "mW")]
+    #[case::kilowatt('㎾', "kW")]
+    #[case::sievert('㏜', "Sv")]
+    fn decomposes_compatibility_unit_symbols(#[case] input: char, #[case] expected: &str) {
+        assert_eq!(
+            compatibility_unit_decomposition(input),
+            Some(expected.chars().collect())
+        );
+    }
+
+    /// Unicode CJK Compatibility names distinguish the accepted SQUARE IU
+    /// (U+337A) from non-unit square abbreviations LN, LOG, and PR. In
+    /// particular, U+33DA is SQUARE PR, not SQUARE IU.
+    #[rstest::rstest]
+    #[case::international_unit('㍺', Some("IU"))]
+    #[case::natural_logarithm('㏑', None)]
+    #[case::logarithm('㏒', None)]
+    #[case::public_relations('㏚', None)]
+    fn accepts_only_unit_semantics(#[case] input: char, #[case] expected: Option<&str>) {
+        assert_eq!(
+            compatibility_unit_decomposition(input),
+            expected.map(|text| text.chars().collect())
+        );
+    }
+
+    const ACCEPTED_GLYPHS: &str = "㍱㍲㍳㍴㍵㍶㍷㍸㍹㍺㎀㎁㎂㎃㎄㎅㎆㎇㎈㎉㎊㎋㎌㎍㎎㎏㎐㎑㎒㎓㎔㎕㎖㎗㎘㎙㎚㎛㎜㎝㎞㎟㎠㎢㎣㎤㎥㎦㎧㎨㎩㎪㎫㎬㎭㎮㎯㎰㎱㎲㎳㎴㎵㎶㎷㎸㎹㎺㎻㎼㎽㎾㎿㏃㏄㏅㏆㏈㏉㏋㏌㏎㏏㏐㏓㏔㏕㏖㏗㏙㏛㏜㏝㏞㏟㏿";
+
+    #[test]
+    fn accepted_compatibility_unit_set_is_stable() {
+        let actual = (0x3300..=0x33ff)
+            .filter_map(char::from_u32)
+            .filter(|ch| compatibility_unit_decomposition(*ch).is_some())
+            .collect::<String>();
+
+        assert_eq!(actual, ACCEPTED_GLYPHS);
+    }
+
+    #[test]
+    fn every_accepted_compatibility_unit_encodes_without_panicking() {
+        // Generated property check: the set identity is asserted separately,
+        // while this loop only proves that every accepted decomposition and
+        // each of its ASCII letter runs reaches the fallible Rule 69 encoder.
+        for glyph in ACCEPTED_GLYPHS.chars() {
+            let parts = compatibility_unit_decomposition(glyph).unwrap();
+            let mut index = 0usize;
+            while index < parts.len() {
+                if !parts[index].is_ascii_alphabetic() {
+                    index += 1;
+                    continue;
+                }
+                let end = index
+                    + parts[index..]
+                        .iter()
+                        .take_while(|part| part.is_ascii_alphabetic())
+                        .count();
+                encode_rule_69_unit_letters(&parts[index..end]).unwrap();
+                index = end;
+            }
+            encode_compatibility_unit(&parts, true, true).unwrap();
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::inch('㏌', "in")]
+    #[case::centimetre('㎝', "cm")]
+    #[case::millimetre('㎜', "mm")]
+    #[case::gigabyte('㎇', "GB")]
+    fn compatibility_units_match_existing_ascii_unit_spelling(
+        #[case] glyph: char,
+        #[case] ascii: &str,
+    ) {
+        let ascii_chars = ascii.chars().collect::<Vec<_>>();
+        let expected = encode_ascii_unit(&ascii_chars, 0)
+            .expect("existing rule 69 ASCII unit")
+            .0;
+        let decomposition = compatibility_unit_decomposition(glyph).unwrap();
+        let actual = encode_compatibility_unit(&decomposition, true, true).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    /// Rules 68/69: a compatibility presentation form follows the same general
+    /// Roman-unit and superscript algorithm as its Unicode decomposition.
+    #[rstest::rstest]
+    #[case::kilogram("㎏", "⠴⠅⠛⠲")]
+    #[case::gigahertz("㎓", "⠴⠠⠛⠠⠓⠵⠲")]
+    #[case::cubic_metre("㎥", "⠴⠍⠘⠼⠉")]
+    #[case::milliwatt("㎽", "⠴⠍⠠⠺⠲")]
+    #[case::kilowatt("㎾", "⠴⠅⠠⠺⠲")]
+    #[case::sievert("㏜", "⠴⠠⠎⠧⠲")]
+    fn encodes_compatibility_unit_symbols(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn slash_after_korean_starts_a_new_roman_unit_chain() {
+        let encoded = crate::encode_to_unicode("시/㎏").unwrap();
+        assert!(
+            encoded.ends_with("⠸⠌⠴⠅⠛⠲"),
+            "the Roman indicator must not be suppressed after a Korean component: {encoded}"
+        );
+    }
+
+    /// Exact PDF examples exercise both Roman-unit continuation through `/`
+    /// and termination before a slash followed by a Korean unit.
+    #[rstest::rstest]
+    #[case::milligram_per_decilitre("160㎎/㎗", "⠼⠁⠋⠚⠴⠍⠛⠸⠌⠙⠇⠲")]
+    #[case::calorie_per_square_centimetre_per_minute("cal/㎠/min", "⠴⠉⠁⠇⠸⠌⠉⠍⠘⠼⠃⠸⠌⠍⠔⠲")]
+    #[case::megahertz("96.7 ㎒", "⠼⠊⠋⠲⠛⠀⠴⠠⠍⠠⠓⠵⠲")]
+    #[case::kilometres_per_hour("80 ㎞/시", "⠼⠓⠚⠀⠴⠅⠍⠲⠸⠌⠠⠕")]
+    fn preserves_pdf_unit_examples(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
     }
 
     #[test]
