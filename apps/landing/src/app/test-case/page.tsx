@@ -13,6 +13,7 @@ import {
   SideBarTrigger,
 } from '@/components/side-bar'
 import { FailedOnlyInput } from '@/components/test-case/FailedOnlyInput'
+import { CorpusTestCaseSection } from '@/components/test-case/CorpusTestCaseSection'
 import { TestCaseFilter } from '@/components/test-case/filter/TestCaseFilter'
 import { TestCaseList } from '@/components/test-case/list/TestCaseList'
 import { TestCaseTable } from '@/components/test-case/table/TestCaseTable'
@@ -36,6 +37,9 @@ import {
   TEST_CASE_FILTERS_MAP,
 } from '@/constants'
 import type { TestStatusMap } from '@/types'
+
+const CORPUS_FILTER_KEY = 'corpus/nikl_2025'
+const CORPUS_BRAILLIFY_MATCH = 57_732
 
 export const metadata: Metadata = {
   title: '테스트 케이스 - 한국·영어 점자 표준 검증',
@@ -84,17 +88,21 @@ export const metadata: Metadata = {
 }
 
 export default async function TestCasePage() {
-  const [testStatus, ruleMap] = await Promise.all([
+  const [testStatus, ruleMap, corpus] = await Promise.all([
     readFile('../../test_status.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<TestStatusMap>,
     readFile('../../rule_map.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<Record<string, { title: string; description: string }>>,
+    readFile('../../test_cases/corpus/sentence.json', 'utf-8').then((data) =>
+      JSON.parse(data),
+    ) as Promise<Array<{ input: string; unicode: string; world?: string }>>,
   ])
 
   // Dynamically create filter map based on rule_map keys
   const filterMap = createFilterMap(Object.keys(ruleMap))
+  filterMap.corpus.push(CORPUS_FILTER_KEY)
 
   const filterTotalMap = Object.fromEntries(
     Object.entries(filterMap).map(([key]) => [
@@ -106,6 +114,25 @@ export default async function TestCasePage() {
       },
     ]),
   ) as FilterTotalMap
+  const corpusWorldMatch = corpus.filter(
+    ({ unicode, world }) => world?.replaceAll(' ', '⠀') === unicode,
+  ).length
+  filterTotalMap.corpus = {
+    braillify: {
+      total: corpus.length,
+      fail: corpus.length - CORPUS_BRAILLIFY_MATCH,
+    },
+    world: {
+      total: corpus.length,
+      fail: corpus.length - corpusWorldMatch,
+    },
+    jeomsarang: { total: 0, fail: 0 },
+  }
+  const corpusSamples = corpus.slice(0, 10).map(({ input, unicode, world }) => ({
+    input,
+    unicode,
+    world: world?.replaceAll(' ', '⠀') ?? '',
+  }))
 
   let totalTest = 0
   let totalFail = 0
@@ -389,6 +416,16 @@ export default async function TestCasePage() {
                 <TestCaseStatFiltered />
               </VStack>
             </TestCaseRuleContainer>
+            <TestCaseDisplayBoundary option="filters" value={CORPUS_FILTER_KEY}>
+              <TestCaseRuleContainer exception={false}>
+                <CorpusTestCaseSection
+                  braillifyMatch={CORPUS_BRAILLIFY_MATCH}
+                  samples={corpusSamples}
+                  total={corpus.length}
+                  worldMatch={corpusWorldMatch}
+                />
+              </TestCaseRuleContainer>
+            </TestCaseDisplayBoundary>
             {cases}
           </TestCaseTotalBoundary>
           <TestCaseTotalBoundary reverse>

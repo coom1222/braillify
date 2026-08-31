@@ -21,6 +21,7 @@
  *
  * Usage:
  *   bun run scripts/fetch-world.ts            # existing PDF-rule fixtures (`world`)
+ *   FETCH_WORLD_DIR=english bun scripts/fetch-world.ts  # one fixture category
  *   FETCH_WORLD_CORPUS=1 bun scripts/fetch-world.ts  # NIKL corpus (`world`)
  */
 
@@ -284,6 +285,13 @@ async function main(): Promise<void> {
   }
 
   const dirs = await readdir(TEST_CASES_DIR)
+  const requestedDirectory = process.env.FETCH_WORLD_DIR
+  const targetDirs = requestedDirectory
+    ? dirs.filter((dir) => dir === requestedDirectory)
+    : dirs.filter((dir) => dir !== 'corpus')
+  if (requestedDirectory && targetDirs.length === 0) {
+    throw new Error(`Unknown test-case directory: ${requestedDirectory}`)
+  }
   const grand: FileStats = {
     total: 0,
     fetched: 0,
@@ -292,7 +300,7 @@ async function main(): Promise<void> {
     errors: 0,
   }
 
-  for (const dir of dirs) {
+  for (const dir of targetDirs) {
     const dirPath = join(TEST_CASES_DIR, dir)
     let files: string[]
     try {
