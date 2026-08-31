@@ -56,6 +56,7 @@ enum PrimaryClass {
 enum Reason {
     Exact,
     ConflictingDuplicateReference,
+    Rule34RomanIndicatorBeforeOpeningParenthesis,
     BrailleWhitespaceEquivalent,
     NfcInputEquivalent,
     NfkcInputEquivalent,
@@ -136,7 +137,7 @@ struct EncodingErrorAudit {
     unclassified_samples: Vec<UnclassifiedEncodingErrorSample>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct PendingRuleReviewClusterSample {
     shard: String,
     index: usize,
@@ -188,6 +189,8 @@ struct AnalysisReport {
     // is PendingRuleReview are pending-rule-review subclusters.
     pending_rule_review_clusters: BTreeMap<String, PendingRuleReviewClusterStats>,
     pending_first_difference_cell_transitions: BTreeMap<String, FirstDifferenceTransitionStats>,
+    pending_first_difference_transitions_after_localized_cohorts:
+        BTreeMap<String, FirstDifferenceTransitionStats>,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -443,6 +446,10 @@ fn classify(encoded: &EncodedCase, conflicting: &BTreeSet<String>) -> (PrimaryCl
         {
             (PrimaryClass::ComparisonMethod, Reason::NfkcInputEquivalent)
         }
+        _ if is_rule_34_reference_order_contradiction(encoded) => (
+            PrimaryClass::CorpusSuspect,
+            Reason::Rule34RomanIndicatorBeforeOpeningParenthesis,
+        ),
         Ok(actual) if roman_before_capital_order(actual) == *expected => (
             PrimaryClass::ImplementationDefect,
             Reason::RomanIndicatorAfterCapitalIndicator,
@@ -560,6 +567,8 @@ const UPPERCASE_ROMAN_HEADWORD_EXPANSION: &str =
     "uppercase_roman_headword_closed_multiword_parenthetical";
 const STANDALONE_UPPERCASE_ROMAN_WORD: &str = "standalone_multi_character_uppercase_roman_word";
 const KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL: &str = "korean_prefixed_closed_allcaps_parenthetical";
+const KOREAN_PREFIXED_CLOSED_ROMAN_ANNOTATION: &str =
+    "korean_prefixed_closed_roman_annotation_rule_34_order";
 const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
     "multi_character_allcaps_roman_runs_joined_by_middle_dot";
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
@@ -575,6 +584,109 @@ const UPPERCASE_ROMAN_HYPHEN_DIGITS: &str = "uppercase_roman_run_followed_by_hyp
 struct InputSpan {
     start_byte: usize,
     end_byte: usize,
+}
+
+/// Finds rule-34-shaped annotations whose opening parenthesis immediately
+/// follows Korean script and whose closed body contains only ordinary Roman
+/// letters, digits, apostrophes, periods, or hyphens. This is an input gate;
+/// the separate output locator decides whether a first difference is at the
+/// opening-parenthesis order established by the PDF example.
+fn korean_prefixed_closed_roman_annotation_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = Vec::new();
+    for (open_byte, _) in input.match_indices('(') {
+        if !input[..open_byte]
+            .chars()
+            .next_back()
+            .is_some_and(is_korean_script)
+        {
+            continue;
+        }
+
+        let body_start = open_byte + 1;
+        let Some(close_offset) = input[body_start..].find(')') else {
+            continue;
+        };
+        let close_byte = body_start + close_offset;
+        let body = &input[body_start..close_byte];
+        if !body.is_empty()
+            && body.chars().any(|ch| ch.is_ascii_alphabetic())
+            && body
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '\'' | '.'))
+        {
+            spans.push(InputSpan {
+                start_byte: open_byte,
+                end_byte: close_byte + 1,
+            });
+        }
+    }
+    spans
+}
+
+/// Locate only the current engine's Korean opening-parenthesis cells. The
+/// signature is derived from a neutral Korean probe and verified at the cell
+/// offset obtained by encoding the real prefix, never from corpus expected.
+fn korean_prefixed_annotation_opening_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let korean = braillify::encode_to_unicode("가").expect("neutral Korean probe must encode");
+    let korean_with_open =
+        braillify::encode_to_unicode("가(").expect("Korean opening-parenthesis probe must encode");
+    let korean_cells = korean.chars().count();
+    let opening = korean_with_open
+        .chars()
+        .skip(korean_cells)
+        .collect::<Vec<_>>();
+
+    korean_prefixed_closed_roman_annotation_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).ok()?;
+            let start = prefix.chars().count();
+            let end = start.checked_add(opening.len())?;
+            (actual_cells.get(start..end) == Some(opening.as_slice())).then_some(start..end)
+        })
+        .collect()
+}
+
+fn first_difference_in_korean_prefixed_annotation_opening(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    korean_prefixed_annotation_opening_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
+/// The PDF's rule-34 example emits the printed Korean opening parenthesis
+/// before entering Roman mode: `⠦⠄⠴`. A corpus reference that instead starts
+/// this same localized input structure with Roman mode plus the UEB opening
+/// parenthesis (`⠴⠐⠣`) contradicts that explicit order. Requiring both
+/// three-cell signatures avoids reclassifying unrelated mismatches in the
+/// broad input cohort.
+fn is_rule_34_reference_order_contradiction(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    let expected = &item.located.case.unicode;
+    if actual == expected {
+        return false;
+    }
+
+    let difference = first_difference_cell(expected, actual);
+    let expected_cells = expected.chars().collect::<Vec<_>>();
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    expected_cells.get(difference..difference + 3) == Some(&['⠴', '⠐', '⠣'])
+        && actual_cells.get(difference..difference + 3) == Some(&['⠦', '⠄', '⠴'])
+        && korean_prefixed_annotation_opening_ranges(&item.located.case.input, actual)
+            .into_iter()
+            .any(|range| range.start == difference)
 }
 
 /// Finds maximal all-caps ASCII runs containing the adjacent letters `OU`.
@@ -836,6 +948,31 @@ fn first_difference_in_korean_context_signature_spans(
     )
     .into_iter()
     .any(|range| range.contains(&first_difference))
+}
+
+/// Only output-localized cohorts may claim a first difference. Broad input-only
+/// coexistence traits are intentionally absent: excluding them would hide
+/// unrelated causes merely because a sentence also contains Roman text.
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_in_allcaps_ou_run(item)
+        || first_difference_in_korean_prefixed_annotation_opening(item)
+        || first_difference_in_inline_parenthesized_operator(item)
+        || first_difference_in_tight_triangle(item)
+        || first_difference_in_signature_spans(
+            item,
+            &single_capital_parenthesized_digit_spans(&item.located.case.input),
+            1,
+        )
+        || first_difference_in_signature_spans(
+            item,
+            &mixed_roman_korean_before_headword_expansion_spans(&item.located.case.input),
+            1,
+        )
+        || first_difference_in_korean_context_signature_spans(
+            item,
+            &uppercase_roman_hyphen_digit_spans(&item.located.case.input),
+            1,
+        )
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -1288,14 +1425,14 @@ fn encoding_error_family(ch: char) -> &'static str {
 fn record_structural_cohort_case(
     stats: &mut PendingRuleReviewClusterStats,
     item: &EncodedCase,
-    primary: PrimaryClass,
     primary_key: &str,
     reason_key: &str,
     sample_limit: usize,
     first_difference_in_output_signature: Option<bool>,
+    include_localized_sample_bucket: bool,
 ) {
     stats.candidates += 1;
-    let outcome = if primary == PrimaryClass::Exact {
+    let outcome = if primary_key == "exact" {
         stats.exact += 1;
         "exact"
     } else {
@@ -1312,7 +1449,7 @@ fn record_structural_cohort_case(
                     .or_insert(0) += 1;
             }
         }
-        if primary == PrimaryClass::CorpusSuspect {
+        if reason_key == "conflicting_duplicate_reference" {
             stats.conflicting_reference_cases += 1;
         }
         *stats
@@ -1321,15 +1458,6 @@ fn record_structural_cohort_case(
             .or_insert(0) += 1;
         "mismatch"
     };
-    let bucket = stats.samples.entry(outcome.to_string()).or_default();
-    if bucket.len() >= sample_limit
-        || bucket
-            .iter()
-            .any(|sample| sample.shard == item.located.shard)
-    {
-        return;
-    }
-
     let expected = &item.located.case.unicode;
     let (actual, error) = match &item.actual {
         Ok(actual) => (actual.as_str(), None),
@@ -1345,7 +1473,7 @@ fn record_structural_cohort_case(
     };
     let first_difference_cell =
         (actual != expected).then(|| first_difference_cell(expected, actual));
-    bucket.push(PendingRuleReviewClusterSample {
+    let sample = PendingRuleReviewClusterSample {
         shard: item.located.shard.clone(),
         index: item.located.index,
         input: item.located.case.input.clone(),
@@ -1355,7 +1483,21 @@ fn record_structural_cohort_case(
         error,
         primary_class: primary_key.to_string(),
         reason: reason_key.to_string(),
-    });
+    };
+    let mut bucket_names = vec![outcome];
+    if include_localized_sample_bucket && first_difference_in_output_signature == Some(true) {
+        bucket_names.push("localized_mismatch");
+    }
+    for bucket_name in bucket_names {
+        let bucket = stats.samples.entry(bucket_name.to_string()).or_default();
+        if bucket.len() < sample_limit
+            && !bucket
+                .iter()
+                .any(|existing| existing.shard == item.located.shard)
+        {
+            bucket.push(sample.clone());
+        }
+    }
 }
 
 fn analyze(
@@ -1388,6 +1530,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            KOREAN_PREFIXED_CLOSED_ROMAN_ANNOTATION.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             KOREAN_INLINE_PARENTHESIZED_OPERATOR.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1417,6 +1563,7 @@ fn analyze(
         ),
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
+    let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
     let mut exact = 0usize;
 
     for item in &encoded {
@@ -1460,28 +1607,47 @@ fn analyze(
                 &reason_key,
                 sample_limit,
             );
+            if !first_difference_claimed_by_localized_cohort(item) {
+                record_pending_first_difference_transition(
+                    &mut pending_first_difference_transitions_after_localized_cohorts,
+                    item,
+                    &primary_key,
+                    &reason_key,
+                    sample_limit,
+                );
+            }
         }
 
-        for (cluster, present, localized_first_difference) in [
+        for (cluster, present, localized_first_difference, localized_samples) in [
             (
                 ALLCAPS_ROMAN_RUN_CONTAINING_OU,
                 !allcaps_roman_runs_containing_ou(&item.located.case.input).is_empty(),
                 Some(first_difference_in_allcaps_ou_run(item)),
+                false,
             ),
             (
                 ALLCAPS_ROMAN_MIDDLE_DOT_RUNS,
                 has_allcaps_roman_middle_dot_runs(&item.located.case.input),
                 None,
+                false,
             ),
             (
                 KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
                 has_korean_prefixed_allcaps_parenthetical(&item.located.case.input),
                 None,
+                false,
+            ),
+            (
+                KOREAN_PREFIXED_CLOSED_ROMAN_ANNOTATION,
+                !korean_prefixed_closed_roman_annotation_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_in_korean_prefixed_annotation_opening(item)),
+                true,
             ),
             (
                 KOREAN_INLINE_PARENTHESIZED_OPERATOR,
                 !inline_parenthesized_operators(&item.located.case.input).is_empty(),
                 Some(first_difference_in_inline_parenthesized_operator(item)),
+                false,
             ),
             (
                 MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION,
@@ -1492,6 +1658,7 @@ fn analyze(
                     &mixed_roman_korean_before_headword_expansion_spans(&item.located.case.input),
                     1,
                 )),
+                false,
             ),
             (
                 SINGLE_CAPITAL_PARENTHESIZED_DIGITS,
@@ -1501,21 +1668,25 @@ fn analyze(
                     &single_capital_parenthesized_digit_spans(&item.located.case.input),
                     1,
                 )),
+                false,
             ),
             (
                 STANDALONE_UPPERCASE_ROMAN_WORD,
                 has_standalone_uppercase_roman_word(&item.located.case.input),
                 None,
+                false,
             ),
             (
                 TIGHT_TRIANGLE_BEFORE_KOREAN,
                 !tight_triangle_positions(&item.located.case.input).is_empty(),
                 Some(first_difference_in_tight_triangle(item)),
+                false,
             ),
             (
                 UPPERCASE_ROMAN_HEADWORD_EXPANSION,
                 has_uppercase_roman_headword_expansion(&item.located.case.input),
                 None,
+                false,
             ),
             (
                 UPPERCASE_ROMAN_HYPHEN_DIGITS,
@@ -1525,6 +1696,7 @@ fn analyze(
                     &uppercase_roman_hyphen_digit_spans(&item.located.case.input),
                     1,
                 )),
+                false,
             ),
         ] {
             if !present {
@@ -1536,11 +1708,11 @@ fn analyze(
             record_structural_cohort_case(
                 stats,
                 item,
-                primary,
                 &primary_key,
                 &reason_key,
                 sample_limit,
                 localized_first_difference,
+                localized_samples,
             );
         }
 
@@ -1675,6 +1847,7 @@ fn analyze(
         rule_36_transition_audit,
         pending_rule_review_clusters,
         pending_first_difference_cell_transitions,
+        pending_first_difference_transitions_after_localized_cohorts,
         overlapping_traits: traits,
         shards,
         samples,
@@ -1778,13 +1951,61 @@ fn markdown(report: &AnalysisReport) -> String {
         }
     }
 
+    text.push_str("\n## Residual first-difference transitions after localized cohorts\n\n");
+    text.push_str(
+        "This ranking removes only cases whose first difference is inside an existing \
+         output-localized cohort. Broad input-only traits are not exclusion masks. The residual \
+         table therefore prioritizes new causes without hiding a mismatch merely because an \
+         unrelated structure coexists elsewhere in its sentence.\n\n",
+    );
+    let mut residual_transitions = report
+        .pending_first_difference_transitions_after_localized_cohorts
+        .iter()
+        .collect::<Vec<_>>();
+    residual_transitions.sort_by(|(left_key, left), (right_key, right)| {
+        right
+            .cases
+            .cmp(&left.cases)
+            .then_with(|| left_key.cmp(right_key))
+    });
+    text.push_str("| Rank | Expected → actual first cell | Residual cases |\n|---:|---|---:|\n");
+    for (rank, (transition, stats)) in residual_transitions.iter().take(20).enumerate() {
+        text.push_str(&format!(
+            "| {} | `{transition}` | {} |\n",
+            rank + 1,
+            stats.cases
+        ));
+    }
+    for (transition, stats) in residual_transitions.iter().take(10) {
+        text.push_str(&format!("\n### Residual `{transition}`\n\n"));
+        for sample in &stats.samples {
+            text.push_str(&format!(
+                "- `{}` #{}: {}\n  - expected: `{}`\n  - actual: `{}`\n  - first differing cell (zero-based): {}\n  - current primary/reason: `{}` / `{}`\n",
+                sample.shard,
+                sample.index,
+                sample
+                    .input
+                    .chars()
+                    .take(180)
+                    .collect::<String>()
+                    .replace('`', "\\`"),
+                sample.expected_excerpt,
+                sample.actual_excerpt,
+                sample.first_difference_cell.unwrap_or(0),
+                sample.primary_class,
+                sample.reason
+            ));
+        }
+    }
+
     text.push_str("\n## Cross-cutting input-only structural cohorts\n\n");
     text.push_str(
         "These are cross-cutting input-only structural cohorts, not new primary classes and not \
          engine routing rules. Candidate selection never changes a case's existing primary \
-         class. Only cohort members already classified as `pending_rule_review` form a pending \
+         class by itself. Only cohort members already classified as `pending_rule_review` form a pending \
          subcluster; exact and other-primary members are controls that retain their existing \
-         outcomes. The \
+         outcomes. A separate classifier may use independently justified, output-localized PDF \
+         evidence, as in the rule-34 three-cell contradiction below. The \
          `uppercase_roman_headword_closed_multiword_parenthetical` gate requires a two-or-more \
          character uppercase ASCII headword immediately followed by a closed parenthesis whose \
          contents are two or more ASCII Roman words separated only by spaces. Because the \
@@ -1809,6 +2030,11 @@ fn markdown(report: &AnalysisReport) -> String {
          Korean character and a closed body of two or more uppercase ASCII letters. It \
          intentionally contains both acronym annotations (`책임자(COO)`) and scientific \
          formulae (`일산화탄소(CO)`) so their semantic collision remains measurable. The \
+         `korean_prefixed_closed_roman_annotation_rule_34_order` gate accepts the narrower \
+         rule-34 body grammar after an immediately preceding Korean character and localizes only \
+         the current engine's Korean opening-parenthesis cells. This distinguishes the PDF's \
+         parenthesis-before-Roman-indicator order from unrelated differences later in the same \
+         sentence. The \
          `multi_character_allcaps_roman_runs_joined_by_middle_dot` gate requires two maximal \
          ASCII-letter runs of at least two capitals joined directly by U+00B7, with \
          non-alphanumeric outer boundaries. It records shapes such as `AI·SW` without assigning \
@@ -1844,7 +2070,7 @@ fn markdown(report: &AnalysisReport) -> String {
         text.push_str(&format!(
             "Of the {} candidates, {pending} are the actual `pending_rule_review` subcluster. \
              The other {} candidates are exact or existing non-pending-primary controls; this \
-             cohort does not reclassify them.\n\n",
+             membership alone does not reclassify them.\n\n",
             stats.candidates,
             stats.candidates - pending
         ));
@@ -2123,6 +2349,37 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(KOREAN_PREFIXED_CLOSED_ROMAN_ANNOTATION)
+    {
+        let corpus_suspect = stats
+            .mismatch_primary_classes
+            .get("corpus_suspect")
+            .copied()
+            .unwrap_or(0);
+        let opposite_order = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2834 ⠴ -> U+2826 ⠦")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent rule-34 opening-order measurement: {} structural candidates, {} exact \
+             controls, {} mismatches, and {}/{} evaluable mismatches whose first difference is \
+             inside the current engine's Korean opening-parenthesis cells. Only the \
+             {opposite_order} localized first-cell transitions have the reference/current order \
+             `⠴` versus `⠦`. After requiring the complete reference `⠴⠐⠣` versus current/PDF \
+             `⠦⠄⠴` three-cell signature and preserving higher-priority comparison \
+             classifications, {corpus_suspect} are classified as `corpus_suspect`; mere \
+             coexistence with a Korean-prefixed Roman annotation does not change a primary \
+             class.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(ALLCAPS_ROMAN_MIDDLE_DOT_RUNS)
     {
         let pending = stats
@@ -2394,7 +2651,8 @@ fn markdown(report: &AnalysisReport) -> String {
     text.push_str(
         "Rule 34 says that when Roman text is enclosed by quotation marks or brackets, the \
          Roman terminator is omitted; its PDF example is `링컨(Lincoln)은 미국의 제16대 \
-         대통령이다.` Rule 54 says that text immediately after an opening bracket and \
+         대통령이다.` The example's cells put the printed Korean opening parenthesis \
+         (`⠦⠄`) before the Roman indicator (`⠴`). Rule 54 says that text immediately after an opening bracket and \
          immediately before a closing bracket is attached. Together these establish the \
          Korean-prefix + closed-Roman-annotation context independently of corpus expected \
          values. A following comma or period is outside the already closed annotation and \
@@ -2402,7 +2660,11 @@ fn markdown(report: &AnalysisReport) -> String {
          The implementation gate exists only inside `split_mixed_math_word`, after the prefix \
          has been proved entirely Korean. It accepts a fully closed parenthesized Roman word \
          (including ASCII digits such as `O4O`) plus ordinary trailing prose punctuation. \
-         The global math detector is byte-for-byte unchanged; regression tests preserve its \
+         The corpus audit treats the opposite localized reference prefix (`⠴⠐⠣`, Roman \
+         indicator plus UEB opening parenthesis) as a data-reference contradiction only when \
+         all three cells and the real input position agree. Broad sentence-level coexistence is \
+         retained as an exact or existing-primary control. This audit does not alter engine \
+         routing. The global math detector is byte-for-byte unchanged; regression tests preserve its \
          existing standalone results for `(x)`, `(A)`, and `(abc)`, while explicit forms such \
          as `(x+1)`, `(a/b)`, and `(x₁)` remain math candidates.\n\n\
          Against the immediately preceding 63,399-exact run, exact matches increased by 2,092. \
@@ -2800,6 +3062,73 @@ mod tests {
     #[case::unclosed("책임자(COO", false)]
     fn detects_korean_prefixed_allcaps_parenthetical(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(has_korean_prefixed_allcaps_parenthetical(input), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::pdf_example("링컨(Lincoln)은", vec!["(Lincoln)"])]
+    #[case::allcaps_annotation("엠디(MD),", vec!["(MD)"])]
+    #[case::roman_suffix("폐쇄회로(CC)TV", vec!["(CC)"])]
+    #[case::alphanumeric("표기(O4O)는", vec!["(O4O)"])]
+    #[case::space_in_body("표기(Home Alliance)는", vec![])]
+    #[case::operator_in_body("수식(x+1)은", vec![])]
+    #[case::roman_prefix("HCA(Home)는", vec![])]
+    #[case::space_before_open("표기 (MD)는", vec![])]
+    #[case::unclosed("표기(MD", vec![])]
+    fn detects_korean_prefixed_closed_roman_annotations(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = korean_prefixed_closed_roman_annotation_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_rule_34_opening_after_the_real_korean_prefix() {
+        let input = "앞말 링컨(Lincoln)은";
+        let actual = braillify::encode_to_unicode(input).expect("rule-34 probe must encode");
+        let ranges = korean_prefixed_annotation_opening_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠦'));
+        assert_eq!(actual.chars().nth(ranges[0].start + 1), Some('⠄'));
+    }
+
+    #[test]
+    fn classifies_only_the_rule_34_three_cell_reference_order_as_corpus_suspect() {
+        let input = "링컨(Lincoln)은";
+        let actual = braillify::encode_to_unicode(input).expect("rule-34 probe must encode");
+        let opening = korean_prefixed_annotation_opening_ranges(input, &actual)
+            .into_iter()
+            .next()
+            .expect("opening must be localized");
+        let mut expected = actual.chars().collect::<Vec<_>>();
+        expected.splice(opening.start..opening.start + 3, ['⠴', '⠐', '⠣']);
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected.into_iter().collect(),
+                },
+            },
+            actual: Ok(actual),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+
+        assert!(is_rule_34_reference_order_contradiction(&encoded));
+        assert_eq!(
+            classify(&encoded, &BTreeSet::new()),
+            (
+                PrimaryClass::CorpusSuspect,
+                Reason::Rule34RomanIndicatorBeforeOpeningParenthesis
+            )
+        );
     }
 
     #[rstest::rstest]
