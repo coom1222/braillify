@@ -34,6 +34,7 @@ struct EncodedCase {
     actual: Result<String, String>,
     nfc_actual: Option<Result<String, String>>,
     nfkc_actual: Option<Result<String, String>>,
+    singleton_unsupported_characters: Vec<char>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -41,6 +42,8 @@ struct EncodedCase {
 enum PrimaryClass {
     Exact,
     ImplementationDefect,
+    UnsupportedCharacterReview,
+    UnclassifiedEncodingErrorReview,
     CorpusSuspect,
     ComparisonMethod,
     PendingRuleReview,
@@ -55,7 +58,8 @@ enum Reason {
     NfcInputEquivalent,
     NfkcInputEquivalent,
     RomanIndicatorAfterCapitalIndicator,
-    EncodingError,
+    UnsupportedCharacterReview,
+    UnclassifiedEncodingErrorReview,
     ForeignTextRuleReview,
     NumberRuleReview,
     PunctuationRuleReview,
@@ -96,9 +100,38 @@ struct Rule36ComplexErrorSample {
 #[derive(Debug, Default, Serialize)]
 struct Rule36TransitionAudit {
     presentation_cases: usize,
-    primary_transitions: BTreeMap<String, usize>,
+    observed_transitions: BTreeMap<String, usize>,
     remaining_complex_errors: usize,
     remaining_complex_error_samples: Vec<Rule36ComplexErrorSample>,
+}
+
+#[derive(Debug, Serialize)]
+struct UnclassifiedEncodingErrorSample {
+    shard: String,
+    index: usize,
+    input: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MultipleSingletonErrorSample {
+    shard: String,
+    index: usize,
+    input: String,
+    unsupported_characters: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct EncodingErrorAudit {
+    raw_total: usize,
+    resolved_by_comparison_method: usize,
+    excluded_as_corpus_suspect: usize,
+    unresolved_review_total: usize,
+    explained_by_singleton_unsupported: usize,
+    multiple_singleton_unsupported: usize,
+    multiple_singleton_samples: Vec<MultipleSingletonErrorSample>,
+    unclassified_without_singleton: usize,
+    unclassified_samples: Vec<UnclassifiedEncodingErrorSample>,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +148,7 @@ struct AnalysisReport {
     encoding_error_messages: BTreeMap<String, usize>,
     encoding_error_families: BTreeMap<String, usize>,
     singleton_error_characters: BTreeMap<String, ErrorCharacterStats>,
+    encoding_error_audit: EncodingErrorAudit,
     rule_36_transition_audit: Rule36TransitionAudit,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
@@ -246,6 +280,20 @@ fn encode_cases(cases: &[LocatedCase], thread_count: usize) -> Vec<EncodedCase> 
                         .cloned()
                         .map(|located| {
                             let actual = braillify::encode_to_unicode(&located.case.input);
+                            let singleton_unsupported_characters = if actual.is_err() {
+                                located
+                                    .case
+                                    .input
+                                    .chars()
+                                    .collect::<BTreeSet<_>>()
+                                    .into_iter()
+                                    .filter(|ch| {
+                                        braillify::encode_to_unicode(&ch.to_string()).is_err()
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
                             let nfc: String = located.case.input.nfc().collect();
                             let nfc_actual = (nfc != located.case.input)
                                 .then(|| braillify::encode_to_unicode(&nfc));
@@ -257,6 +305,7 @@ fn encode_cases(cases: &[LocatedCase], thread_count: usize) -> Vec<EncodedCase> 
                                 actual,
                                 nfc_actual,
                                 nfkc_actual,
+                                singleton_unsupported_characters,
                             }
                         })
                         .collect::<Vec<_>>()
@@ -337,7 +386,14 @@ fn classify(encoded: &EncodedCase, conflicting: &BTreeSet<String>) -> (PrimaryCl
             PrimaryClass::ImplementationDefect,
             Reason::RomanIndicatorAfterCapitalIndicator,
         ),
-        Err(_) => (PrimaryClass::ImplementationDefect, Reason::EncodingError),
+        Err(_) if !encoded.singleton_unsupported_characters.is_empty() => (
+            PrimaryClass::UnsupportedCharacterReview,
+            Reason::UnsupportedCharacterReview,
+        ),
+        Err(_) => (
+            PrimaryClass::UnclassifiedEncodingErrorReview,
+            Reason::UnclassifiedEncodingErrorReview,
+        ),
         Ok(_)
             if encoded
                 .located
@@ -382,31 +438,54 @@ fn is_roman_numeral_presentation(ch: char) -> bool {
     (0x2160..=0x217f).contains(&(ch as u32))
 }
 
-/// Reconstruct the immediately preceding rule-36 behavior without running a
-/// second engine or reading a saved expected-output lookup. Before targeted
-/// normalization, any U+2160–U+217F character made the direct and NFC paths
-/// fail. The NFKC comparison path already contains the corresponding ASCII
-/// Roman letters and is unaffected by the engine change, so it remains valid
-/// for reproducing the former `comparison_method` classification.
-fn classify_before_rule_36(
-    encoded: &EncodedCase,
-    conflicting: &BTreeSet<String>,
-) -> Option<(PrimaryClass, Reason)> {
-    encoded
+/// Reconstruct an observable before/after transition for the rule-36 cohort
+/// without assigning today's primary-class policy to the historical run.
+/// Before targeted normalization, direct/NFC encoding failed; an exact NFKC
+/// path was observable separately. The current side reports only whether the
+/// case is exact, an encoded mismatch awaiting rule review, or still blocked by
+/// another independently unsupported singleton character.
+fn rule_36_observed_transition(encoded: &EncodedCase) -> Option<&'static str> {
+    if !encoded
         .located
         .case
         .input
         .chars()
         .any(is_roman_numeral_presentation)
-        .then(|| {
-            let mut legacy = encoded.clone();
-            legacy.actual = Err("legacy unsupported Roman-numeral presentation".to_string());
-            legacy.nfc_actual = legacy
-                .nfc_actual
-                .as_ref()
-                .map(|_| Err("legacy unsupported Roman-numeral presentation".to_string()));
-            classify(&legacy, conflicting)
-        })
+    {
+        return None;
+    }
+
+    let expected = &encoded.located.case.unicode;
+    let before = if encoded
+        .nfkc_actual
+        .as_ref()
+        .is_some_and(|result| result.as_ref().is_ok_and(|actual| actual == expected))
+    {
+        "nfkc_input_equivalent"
+    } else {
+        "encoding_error"
+    };
+    let after = match &encoded.actual {
+        Ok(actual) if actual == expected => "exact",
+        Ok(_) => "encoded_mismatch_pending_rule_review",
+        Err(_) if !encoded.singleton_unsupported_characters.is_empty() => {
+            "unsupported_character_review"
+        }
+        Err(_) => "unclassified_encoding_error_review",
+    };
+    Some(match (before, after) {
+        ("nfkc_input_equivalent", "exact") => "nfkc_input_equivalent -> exact",
+        ("encoding_error", "encoded_mismatch_pending_rule_review") => {
+            "encoding_error -> encoded_mismatch_pending_rule_review"
+        }
+        ("encoding_error", "unsupported_character_review") => {
+            "encoding_error -> unsupported_character_review"
+        }
+        ("encoding_error", "unclassified_encoding_error_review") => {
+            "encoding_error -> unclassified_encoding_error_review"
+        }
+        _ => "other_observed_transition",
+    })
 }
 
 fn is_delimiter_or_quote(ch: char) -> bool {
@@ -501,7 +580,7 @@ fn analyze(
     let mut encoding_error_messages = BTreeMap::new();
     let mut encoding_error_families = BTreeMap::new();
     let mut singleton_error_characters = BTreeMap::<String, ErrorCharacterStats>::new();
-    let mut singleton_error_cache = BTreeMap::<char, bool>::new();
+    let mut encoding_error_audit = EncodingErrorAudit::default();
     let mut traits = BTreeMap::new();
     let mut shards = BTreeMap::<String, ShardStats>::new();
     let mut samples = BTreeMap::<String, Vec<Sample>>::new();
@@ -510,24 +589,19 @@ fn analyze(
 
     for item in &encoded {
         let (primary, reason) = classify(item, &conflicting);
-        if let Some((before_primary, _)) = classify_before_rule_36(item, &conflicting) {
+        if let Some(transition) = rule_36_observed_transition(item) {
             rule_36_transition_audit.presentation_cases += 1;
-            let transition = format!("{} -> {}", enum_key(&before_primary), enum_key(&primary));
             *rule_36_transition_audit
-                .primary_transitions
-                .entry(transition)
+                .observed_transitions
+                .entry(transition.to_string())
                 .or_insert(0) += 1;
 
-            if primary == PrimaryClass::ImplementationDefect && item.actual.is_err() {
+            if item.actual.is_err() {
                 let other_unsupported_characters = item
-                    .located
-                    .case
-                    .input
-                    .chars()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
+                    .singleton_unsupported_characters
+                    .iter()
+                    .copied()
                     .filter(|ch| !is_roman_numeral_presentation(*ch))
-                    .filter(|ch| braillify::encode_to_unicode(&ch.to_string()).is_err())
                     .map(|ch| format!("U+{:04X} {ch}", ch as u32))
                     .collect::<Vec<_>>();
                 rule_36_transition_audit.remaining_complex_errors += 1;
@@ -555,19 +629,49 @@ fn analyze(
         }
 
         let input = &item.located.case.input;
-        if primary == PrimaryClass::ImplementationDefect
-            && let Err(error) = &item.actual
-        {
-            *encoding_error_messages.entry(error.clone()).or_insert(0) += 1;
-            let unique_chars = input.chars().collect::<BTreeSet<_>>();
-            let mut case_families = BTreeSet::new();
-            for ch in unique_chars {
-                let fails_alone = *singleton_error_cache
-                    .entry(ch)
-                    .or_insert_with(|| braillify::encode_to_unicode(&ch.to_string()).is_err());
-                if fails_alone {
-                    let key = format!("U+{:04X} {ch}", ch as u32);
-                    let family = encoding_error_family(ch);
+        if let Err(error) = &item.actual {
+            encoding_error_audit.raw_total += 1;
+            if primary == PrimaryClass::ComparisonMethod {
+                encoding_error_audit.resolved_by_comparison_method += 1;
+            } else if primary == PrimaryClass::CorpusSuspect {
+                encoding_error_audit.excluded_as_corpus_suspect += 1;
+            } else {
+                encoding_error_audit.unresolved_review_total += 1;
+                if item.singleton_unsupported_characters.is_empty() {
+                    encoding_error_audit.unclassified_without_singleton += 1;
+                    if encoding_error_audit.unclassified_samples.len() < sample_limit {
+                        encoding_error_audit.unclassified_samples.push(
+                            UnclassifiedEncodingErrorSample {
+                                shard: item.located.shard.clone(),
+                                index: item.located.index,
+                                input: item.located.case.input.clone(),
+                                error: error.clone(),
+                            },
+                        );
+                    }
+                } else {
+                    encoding_error_audit.explained_by_singleton_unsupported += 1;
+                    if item.singleton_unsupported_characters.len() > 1 {
+                        encoding_error_audit.multiple_singleton_unsupported += 1;
+                        encoding_error_audit.multiple_singleton_samples.push(
+                            MultipleSingletonErrorSample {
+                                shard: item.located.shard.clone(),
+                                index: item.located.index,
+                                input: item.located.case.input.clone(),
+                                unsupported_characters: item
+                                    .singleton_unsupported_characters
+                                    .iter()
+                                    .map(|ch| format!("U+{:04X} {ch}", *ch as u32))
+                                    .collect(),
+                            },
+                        );
+                    }
+                }
+                *encoding_error_messages.entry(error.clone()).or_insert(0) += 1;
+                let mut case_families = BTreeSet::new();
+                for ch in &item.singleton_unsupported_characters {
+                    let key = format!("U+{:04X} {ch}", *ch as u32);
+                    let family = encoding_error_family(*ch);
                     case_families.insert(family);
                     singleton_error_characters
                         .entry(key)
@@ -578,11 +682,11 @@ fn analyze(
                             family,
                         });
                 }
-            }
-            for family in case_families {
-                *encoding_error_families
-                    .entry(family.to_string())
-                    .or_insert(0) += 1;
+                for family in case_families {
+                    *encoding_error_families
+                        .entry(family.to_string())
+                        .or_insert(0) += 1;
+                }
             }
         }
         for (name, present) in [
@@ -643,6 +747,7 @@ fn analyze(
         encoding_error_messages,
         encoding_error_families,
         singleton_error_characters,
+        encoding_error_audit,
         rule_36_transition_audit,
         overlapping_traits: traits,
         shards,
@@ -679,7 +784,11 @@ fn markdown(report: &AnalysisReport) -> String {
     text.push_str(
         "Primary classes are evidence gates, not permissions to change the engine. \
          `implementation_defect` is restricted to defects independently confirmed from the PDF \
-         (the rules 28/29 roman-indicator ordering signature) and actual encoding errors. \
+         (currently the rules 28/29 roman-indicator ordering signature). \
+         `unsupported_character_review` contains encoding failures fully explained by one or more \
+         singleton characters whose support obligation has not been confirmed from the PDF. \
+         `unclassified_encoding_error_review` contains other encoding failures until a PDF-backed \
+         implementation obligation or a reproducible comparison/corpus issue is established. \
          `pending_rule_review` contains foreign-text, number, punctuation, and Korean candidates \
          that have not yet been resolved against the PDF. `corpus_suspect` is reserved for \
          independently detectable contradictions such as one input having multiple references. \
@@ -696,9 +805,70 @@ fn markdown(report: &AnalysisReport) -> String {
 
     text.push_str("\n## Encoding-error diagnostics\n\n");
     text.push_str(
-        "These are overlapping diagnostics for `implementation_defect` encoding errors, not additional primary classes. \
-         A singleton error character is a character that also fails when encoded by itself.\n\n",
+        "The audit starts from all raw encoding errors, then separates cases already resolved by \
+         a comparison method or corpus contradiction. The message, family, and singleton tables \
+         below count only unresolved encoding-error review cases. These diagnostics are not \
+         additional primary classes. \
+         A singleton unsupported character is a character that also fails when encoded by itself. \
+         Such a failure remains a review candidate until the PDF independently establishes support.\n\n",
     );
+    text.push_str("| Encoding-error audit | Cases |\n|---|---:|\n");
+    text.push_str(&format!(
+        "| Raw encoding errors | {} |\n",
+        report.encoding_error_audit.raw_total
+    ));
+    text.push_str(&format!(
+        "| Resolved by comparison method | {} |\n",
+        report.encoding_error_audit.resolved_by_comparison_method
+    ));
+    text.push_str(&format!(
+        "| Excluded as corpus suspect | {} |\n",
+        report.encoding_error_audit.excluded_as_corpus_suspect
+    ));
+    text.push_str(&format!(
+        "| Unresolved encoding-error review cases | {} |\n",
+        report.encoding_error_audit.unresolved_review_total
+    ));
+    text.push_str(&format!(
+        "| Explained by singleton unsupported character(s) | {} |\n",
+        report
+            .encoding_error_audit
+            .explained_by_singleton_unsupported
+    ));
+    text.push_str(&format!(
+        "| Multiple singleton unsupported characters | {} |\n",
+        report.encoding_error_audit.multiple_singleton_unsupported
+    ));
+    text.push_str(&format!(
+        "| Unclassified without a singleton explanation | {} |\n\n",
+        report.encoding_error_audit.unclassified_without_singleton
+    ));
+    for sample in &report.encoding_error_audit.multiple_singleton_samples {
+        text.push_str(&format!(
+            "- compound `{}` #{}: {}\n  - singleton unsupported: `{}`\n",
+            sample.shard,
+            sample.index,
+            sample.input.chars().take(180).collect::<String>(),
+            sample.unsupported_characters.join(", ")
+        ));
+    }
+    for sample in &report.encoding_error_audit.unclassified_samples {
+        text.push_str(&format!(
+            "- unclassified `{}` #{}: {} (`{}`)\n",
+            sample.shard,
+            sample.index,
+            sample.input.chars().take(180).collect::<String>(),
+            sample.error
+        ));
+    }
+    if !report
+        .encoding_error_audit
+        .multiple_singleton_samples
+        .is_empty()
+        || !report.encoding_error_audit.unclassified_samples.is_empty()
+    {
+        text.push('\n');
+    }
     text.push_str("| Error message | Cases |\n|---|---:|\n");
     for (name, count) in &report.encoding_error_messages {
         text.push_str(&format!("| `{name}` | {count} |\n"));
@@ -803,8 +973,8 @@ fn markdown(report: &AnalysisReport) -> String {
         "Presentation-form cases audited: {}.\n\n",
         report.rule_36_transition_audit.presentation_cases
     ));
-    text.push_str("| Previous primary → current primary | Cases |\n|---|---:|\n");
-    for (transition, count) in &report.rule_36_transition_audit.primary_transitions {
+    text.push_str("| Previous observation → current observation | Cases |\n|---|---:|\n");
+    for (transition, count) in &report.rule_36_transition_audit.observed_transitions {
         text.push_str(&format!("| `{transition}` | {count} |\n"));
     }
     text.push_str(&format!(
@@ -845,7 +1015,7 @@ fn markdown(report: &AnalysisReport) -> String {
         "| Rules 68/69 compatibility unit algorithm | 5,141/5,141 | 63,388/83,528 | 75.89% | 96 Unicode unit presentation forms use one decomposition/letter-run/attachment algorithm; encoding errors fell from 434 to 226 |\n",
     );
     text.push_str(
-        "| Rule 36 Unicode Roman-numeral presentation normalization | 5,141/5,141 | 63,399/83,528 | 75.90% | U+2160–U+217F use the corresponding Roman-letter spelling; 11 NFKC-comparison cases became exact, 23 encoding errors became pending review, and 3 compound errors remain |\n",
+        "| Rule 36 Unicode Roman-numeral presentation normalization | 5,141/5,141 | 63,399/83,528 | 75.90% | U+2160–U+217F use the corresponding Roman-letter spelling; 11 NFKC-equivalent observations became exact, 23 errors became encoded mismatches pending review, and 3 remain blocked by `㈜` |\n",
     );
     text.push_str(
         "\nEngine changes must add a row only after both the 5,141-case standard suite and \
@@ -926,32 +1096,32 @@ mod tests {
         "same",
         Some("same"),
         "same",
-        PrimaryClass::ComparisonMethod,
-        PrimaryClass::Exact
+        &[],
+        "nfkc_input_equivalent -> exact"
     )]
     #[case::encoding_error_becomes_pending(
         "Ⅳ장",
         "expected",
         Some("different"),
         "different",
-        PrimaryClass::ImplementationDefect,
-        PrimaryClass::PendingRuleReview
+        &[],
+        "encoding_error -> encoded_mismatch_pending_rule_review"
     )]
     #[case::compound_encoding_error_remains(
         "Ⅳ㈜",
         "expected",
         None,
         "different",
-        PrimaryClass::ImplementationDefect,
-        PrimaryClass::ImplementationDefect
+        &['㈜'],
+        "encoding_error -> unsupported_character_review"
     )]
-    fn reconstructs_rule_36_primary_transition(
+    fn reconstructs_rule_36_observed_transition(
         #[case] input: &str,
         #[case] expected: &str,
         #[case] actual: Option<&str>,
         #[case] nfkc_actual: &str,
-        #[case] expected_before: PrimaryClass,
-        #[case] expected_after: PrimaryClass,
+        #[case] singleton_unsupported_characters: &[char],
+        #[case] expected_transition: &str,
     ) {
         let encoded = EncodedCase {
             located: LocatedCase {
@@ -968,14 +1138,50 @@ mod tests {
             ),
             nfc_actual: None,
             nfkc_actual: Some(Ok(nfkc_actual.to_string())),
+            singleton_unsupported_characters: singleton_unsupported_characters.to_vec(),
         };
-        let conflicts = BTreeSet::new();
 
-        let (before, _) = classify_before_rule_36(&encoded, &conflicts).unwrap();
-        let (after, _) = classify(&encoded, &conflicts);
+        assert_eq!(
+            rule_36_observed_transition(&encoded),
+            Some(expected_transition)
+        );
+    }
 
-        assert_eq!(before, expected_before);
-        assert_eq!(after, expected_after);
+    #[rstest::rstest]
+    #[case::singleton_explained(
+        &['㈜'],
+        PrimaryClass::UnsupportedCharacterReview,
+        Reason::UnsupportedCharacterReview
+    )]
+    #[case::unclassified(
+        &[],
+        PrimaryClass::UnclassifiedEncodingErrorReview,
+        Reason::UnclassifiedEncodingErrorReview
+    )]
+    fn encoding_error_primary_requires_independent_pdf_evidence(
+        #[case] singleton_unsupported_characters: &[char],
+        #[case] expected_primary: PrimaryClass,
+        #[case] expected_reason: Reason,
+    ) {
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: "입력".to_string(),
+                    unicode: "expected".to_string(),
+                },
+            },
+            actual: Err("encoding failed".to_string()),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: singleton_unsupported_characters.to_vec(),
+        };
+
+        assert_eq!(
+            classify(&encoded, &BTreeSet::new()),
+            (expected_primary, expected_reason)
+        );
     }
 
     #[test]
