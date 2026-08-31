@@ -191,6 +191,7 @@ struct AnalysisReport {
     pending_first_difference_cell_transitions: BTreeMap<String, FirstDifferenceTransitionStats>,
     pending_first_difference_transitions_after_localized_cohorts:
         BTreeMap<String, FirstDifferenceTransitionStats>,
+    compact_numeric_ascii_suffixes: BTreeMap<String, PendingRuleReviewClusterStats>,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -580,6 +581,9 @@ const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
 const UPPERCASE_ROMAN_HYPHEN_DIGITS: &str = "uppercase_roman_run_followed_by_hyphen_digits";
 const DECIMAL_POINT_BETWEEN_DIGITS: &str = "decimal_point_between_ascii_digits";
+const COMPACT_NUMERIC_ASCII_SUFFIX: &str = "compact_numeric_ascii_letter_suffix";
+const RULE69_ASCII_UNIT_BEFORE_TERMINATOR_SKIPPING_SYMBOL: &str =
+    "rule69_ascii_unit_before_terminator_skipping_symbol";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
@@ -621,6 +625,134 @@ fn decimal_word_spans(input: &str) -> Vec<InputSpan> {
             end_byte,
         })
         .collect()
+}
+
+/// Finds a compact numeric prefix followed immediately by one or more ASCII
+/// letters, with alphanumeric outer boundaries. The shape includes rule-69
+/// units but deliberately does not declare every suffix a unit: mathematical
+/// variables and identifiers can share the same surface form.
+fn compact_numeric_ascii_suffix_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_digit()
+            || input[..cursor]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start_byte = cursor;
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_digit() || matches!(*byte, b',' | b'.'))
+        {
+            cursor += 1;
+        }
+        let suffix_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+            cursor += 1;
+        }
+        if cursor > suffix_start
+            && input[cursor..]
+                .chars()
+                .next()
+                .is_none_or(|ch| !ch.is_ascii_alphanumeric())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte: cursor,
+            });
+        }
+    }
+    spans
+}
+
+fn compact_numeric_ascii_suffix(span: InputSpan, input: &str) -> &str {
+    input[span.start_byte..span.end_byte]
+        .trim_start_matches(|ch: char| ch.is_ascii_digit() || matches!(ch, ',' | '.'))
+}
+
+/// Refines the broad compact-suffix cohort to spellings already recognized by
+/// rule 69, immediately followed by punctuation for which rules 33/34 omit the
+/// Roman terminator. The span includes that punctuation so the output locator
+/// measures the exact unit-to-punctuation boundary rather than mere coexistence.
+fn rule69_ascii_unit_before_terminator_skipping_symbol_spans(input: &str) -> Vec<InputSpan> {
+    const RULE69_ASCII_UNITS: &[&str] = &["min", "cal", "cm", "kg", "in", "mm", "GB", "m", "h"];
+
+    compact_numeric_ascii_suffix_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let suffix = compact_numeric_ascii_suffix(span, input);
+            let symbol = input[span.end_byte..].chars().next()?;
+            (RULE69_ASCII_UNITS.contains(&suffix)
+                && matches!(
+                    symbol,
+                    '.' | '?'
+                        | '!'
+                        | '…'
+                        | '⋯'
+                        | '"'
+                        | '\''
+                        | '”'
+                        | '’'
+                        | '」'
+                        | '』'
+                        | '〉'
+                        | '》'
+                        | '('
+                        | ')'
+                        | ']'
+                        | '}'
+                        | ','
+                        | ':'
+                        | ';'
+                        | '―'
+                ))
+            .then_some(InputSpan {
+                start_byte: span.start_byte,
+                end_byte: span.end_byte + symbol.len_utf8(),
+            })
+        })
+        .collect()
+}
+
+fn first_difference_at_rule69_ascii_unit_terminator_boundary(item: &EncodedCase) -> bool {
+    first_difference_in_compact_numeric_ascii_suffix_spans(
+        item,
+        &rule69_ascii_unit_before_terminator_skipping_symbol_spans(&item.located.case.input),
+    )
+}
+
+fn first_difference_in_compact_numeric_ascii_suffix(item: &EncodedCase) -> bool {
+    first_difference_in_compact_numeric_ascii_suffix_spans(
+        item,
+        &compact_numeric_ascii_suffix_spans(&item.located.case.input),
+    )
+}
+
+fn first_difference_in_compact_numeric_ascii_suffix_spans(
+    item: &EncodedCase,
+    spans: &[InputSpan],
+) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    korean_context_signature_ranges(&item.located.case.input, actual, spans, 0)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
 }
 
 fn first_difference_in_decimal_word(item: &EncodedCase) -> bool {
@@ -1010,6 +1142,7 @@ fn first_difference_in_korean_context_signature_spans(
 /// unrelated causes merely because a sentence also contains Roman text.
 fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
     first_difference_in_allcaps_ou_run(item)
+        || first_difference_in_compact_numeric_ascii_suffix(item)
         || first_difference_in_decimal_word(item)
         || first_difference_in_korean_prefixed_annotation_opening(item)
         || first_difference_in_inline_parenthesized_operator(item)
@@ -1574,6 +1707,14 @@ fn analyze(
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
     let mut pending_rule_review_clusters = BTreeMap::from([
         (
+            RULE69_ASCII_UNIT_BEFORE_TERMINATOR_SKIPPING_SYMBOL.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            COMPACT_NUMERIC_ASCII_SUFFIX.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             DECIMAL_POINT_BETWEEN_DIGITS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -1624,6 +1765,7 @@ fn analyze(
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
+    let mut compact_numeric_ascii_suffixes = BTreeMap::new();
     let mut exact = 0usize;
 
     for item in &encoded {
@@ -1679,6 +1821,23 @@ fn analyze(
         }
 
         for (cluster, present, localized_first_difference, localized_samples) in [
+            (
+                RULE69_ASCII_UNIT_BEFORE_TERMINATOR_SKIPPING_SYMBOL,
+                !rule69_ascii_unit_before_terminator_skipping_symbol_spans(
+                    &item.located.case.input,
+                )
+                .is_empty(),
+                Some(first_difference_at_rule69_ascii_unit_terminator_boundary(
+                    item,
+                )),
+                true,
+            ),
+            (
+                COMPACT_NUMERIC_ASCII_SUFFIX,
+                !compact_numeric_ascii_suffix_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_in_compact_numeric_ascii_suffix(item)),
+                true,
+            ),
             (
                 DECIMAL_POINT_BETWEEN_DIGITS,
                 !decimal_word_spans(&item.located.case.input).is_empty(),
@@ -1779,6 +1938,26 @@ fn analyze(
                 sample_limit,
                 localized_first_difference,
                 localized_samples,
+            );
+        }
+
+        let mut suffix_spans = BTreeMap::<String, Vec<InputSpan>>::new();
+        for span in compact_numeric_ascii_suffix_spans(&item.located.case.input) {
+            suffix_spans
+                .entry(compact_numeric_ascii_suffix(span, &item.located.case.input).to_string())
+                .or_default()
+                .push(span);
+        }
+        for (suffix, spans) in suffix_spans {
+            let localized = first_difference_in_compact_numeric_ascii_suffix_spans(item, &spans);
+            record_structural_cohort_case(
+                compact_numeric_ascii_suffixes.entry(suffix).or_default(),
+                item,
+                &primary_key,
+                &reason_key,
+                sample_limit,
+                Some(localized),
+                false,
             );
         }
 
@@ -1914,6 +2093,7 @@ fn analyze(
         pending_rule_review_clusters,
         pending_first_difference_cell_transitions,
         pending_first_difference_transitions_after_localized_cohorts,
+        compact_numeric_ascii_suffixes,
         overlapping_traits: traits,
         shards,
         samples,
@@ -2115,7 +2295,14 @@ fn markdown(report: &AnalysisReport) -> String {
          signature as localized. The `decimal_point_between_ascii_digits` gate finds \
          whitespace-delimited words containing `digit.digit` and reproduces each whole word in a \
          neutral Korean context, so suffixes and punctuation remain part of the current-engine \
-         signature. The `tight_triangle_mark_immediately_before_korean` gate requires literal \
+         signature. The `compact_numeric_ascii_letter_suffix` gate finds a numeric prefix \
+         immediately followed by ASCII letters and retains suffix-specific outcome counts. It \
+         intentionally includes both possible rule-69 units and ambiguous variable/identifier \
+         forms; membership alone does not assign unit semantics. The \
+         `rule69_ascii_unit_before_terminator_skipping_symbol` gate is narrower: it accepts only \
+         ASCII unit spellings already supported by rule 69, includes the immediately following \
+         rule-33/34 punctuation cell in the localized signature, and does not infer new units. The \
+         `tight_triangle_mark_immediately_before_korean` gate requires literal \
          `△한글` with no input space and includes the first following Korean cell in its localized \
          output range, so an observed missing-space difference is measured at the mark boundary.\n\n",
     );
@@ -2361,6 +2548,88 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(COMPACT_NUMERIC_ASCII_SUFFIX)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent compact numeric+ASCII-suffix measurement: {} candidates, {} exact \
+             controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
+             subcluster, and {}/{} evaluable mismatches whose first difference is inside the \
+             complete current-engine output signature. Rule 40 requires the numeric indicator \
+             and rule 69 requires Roman indicators around a Roman-written unit, but the input \
+             shape alone cannot prove that every ASCII suffix is a unit.\n\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+
+        let mut suffixes = report
+            .compact_numeric_ascii_suffixes
+            .iter()
+            .collect::<Vec<_>>();
+        suffixes.sort_by(|(left_key, left), (right_key, right)| {
+            right
+                .candidates
+                .cmp(&left.candidates)
+                .then_with(|| left_key.cmp(right_key))
+        });
+        text.push_str(
+            "| ASCII suffix | Candidates | Exact | Mismatch | Localized first diff |\n\
+             |---|---:|---:|---:|---:|\n",
+        );
+        for (suffix, suffix_stats) in suffixes.into_iter().take(25) {
+            text.push_str(&format!(
+                "| `{suffix}` | {} | {} | {} | {} |\n",
+                suffix_stats.candidates,
+                suffix_stats.exact,
+                suffix_stats.mismatch,
+                suffix_stats.first_difference_in_output_signature
+            ));
+        }
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(RULE69_ASCII_UNIT_BEFORE_TERMINATOR_SKIPPING_SYMBOL)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent rule-69 ASCII-unit punctuation-boundary measurement: {} candidates, {} \
+             exact controls, {} mismatches, {pending} members in the actual \
+             `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose first \
+             difference is localized to the unit-plus-punctuation output signature. PDF rule 69 \
+             requires a Roman terminator after a Roman-written unit in the ordinary case, while \
+             rules 33/34 omit it at the listed punctuation or enclosing-mark boundary; the rule \
+             46 PDF example `체중(kg)` is the minimal parenthesized-unit control. Membership is \
+             restricted to rule-69 spellings already supported by the engine and does not infer \
+             unit semantics for arbitrary ASCII suffixes.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+        text.push_str(
+            " Analyzer pre-fix baseline: 440 candidates, 0 exact controls, 440 mismatches, 435 \
+             pending members, and 9 signature-local first differences. After the generalized \
+             rule-33/34 boundary override and the matching non-math routing guard, the same cohort \
+             has 325 exact controls and 115 mismatches. Corpus-wide exact matches moved from \
+             66,039 to 66,436 (+397); the additional gains are applications of the same boundary \
+             rule outside this strict ASCII detector, including compatibility-unit forms. The \
+             complete standard suite remains 5,141/5,141.\n",
+        );
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(DECIMAL_POINT_BETWEEN_DIGITS)
     {
         let pending = stats
@@ -2517,15 +2786,13 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated
         ));
-        text.push_str(&format!(
-            " At this implementation checkpoint, the strict cohort moved from 0 to {} exact \
-             cases; the corpus-wide total moved from 65,491 to {} ({:+} exact) because the same \
-             PDF-backed spacing rule also applies outside the stricter Korean-boundary audit \
-             gate. The complete standard suite remains 5,141/5,141.\n",
-            stats.exact,
-            report.exact,
-            report.exact as isize - 65_491
-        ));
+        text.push_str(
+            " At that implementation checkpoint, the strict cohort moved from 0 to 17 exact \
+             cases; the corpus-wide total moved from 65,491 to 65,514 (+23 exact) because the same \
+             PDF-backed spacing rule also applied outside the stricter Korean-boundary audit \
+             gate. These are immutable checkpoint counts rather than the report's later cumulative \
+             total. The complete standard suite remained 5,141/5,141.\n",
+        );
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
@@ -2797,7 +3064,14 @@ fn markdown(report: &AnalysisReport) -> String {
         "| Rules 43/48 decimal-point ownership | 5,141/5,141 | 66,039/83,528 | 79.06% | A period directly between ASCII digits remains on the numeric punctuation path even when its word or sentence also contains Roman text; 647 localized Roman-entry differences were removed and 525 cases became exact |\n",
     );
     text.push_str(
-        "\nEngine changes must add a row only after both the 5,141-case standard suite and \
+        "| Rules 33/34/69 Roman-unit punctuation boundary | 5,141/5,141 | 66,436/83,528 | 79.54% | Rule-69 units retain their ordinary terminator at end/Korean/slash boundaries but omit it before rule-33/34 punctuation or enclosing marks; compact unit tokens with that boundary stay off the math path; 397 cases became exact |\n",
+    );
+    text.push_str(
+        "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
+         run was accepted from its custom testcase summary, not the trailing filtered harness: \
+         `총 테스트 케이스: 5141`, `성공: 5141`, `실패: 0`, and \
+         `Skip (limitation): 0`.\n\n\
+         Engine changes must add a row only after both the 5,141-case standard suite and \
          this full analysis have been rerun. Suspect-reference clusters stay in this report; \
          they are not engine targets without independent PDF evidence.\n",
     );
@@ -3033,6 +3307,61 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
         assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::energy("용량 13GWh 규모", vec![("13GWh", "GWh")])]
+    #[case::distance("구간 0.73km", vec![("0.73km", "km")])]
+    #[case::mass("필로폰 968g 등", vec![("968g", "g")])]
+    #[case::ambiguous_variable("값 3x", vec![("3x", "x")])]
+    #[case::letter_prefix("GPT3 모델", vec![])]
+    #[case::alphanumeric_suffix("13GWh2", vec![])]
+    fn detects_compact_numeric_ascii_suffixes(
+        #[case] input: &str,
+        #[case] expected: Vec<(&str, &str)>,
+    ) {
+        let actual = compact_numeric_ascii_suffix_spans(input)
+            .into_iter()
+            .map(|span| {
+                (
+                    &input[span.start_byte..span.end_byte],
+                    compact_numeric_ascii_suffix(span, input),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_compact_numeric_ascii_suffix_in_current_output() {
+        let input = "용량은 13GWh 규모다.";
+        let actual = braillify::encode_to_unicode(input).expect("compact suffix probe must encode");
+        let ranges = korean_context_signature_ranges(
+            input,
+            &actual,
+            &compact_numeric_ascii_suffix_spans(input),
+            0,
+        );
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+    }
+
+    #[rstest::rstest]
+    #[case::kilogram_parenthesis("상자(20kg)당", vec!["20kg)"])]
+    #[case::metre_quote("길이는 3m”라고", vec!["3m”"])]
+    #[case::ordinary_unit_boundary("무게는 3kg이다", vec![])]
+    #[case::ambiguous_suffix("값은 3x)이다", vec![])]
+    #[case::forced_slash_boundary("속도는 3m/시", vec![])]
+    fn detects_rule69_ascii_units_before_terminator_skipping_symbols(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = rule69_ascii_unit_before_terminator_skipping_symbol_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 
     #[test]

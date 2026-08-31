@@ -281,6 +281,25 @@ fn trim_recent_english_indicator(result: &mut Vec<u8>) {
     }
 }
 
+/// Rules 33/34 override rule 69's ordinary trailing Roman terminator when a
+/// listed Korean punctuation mark or an enclosing mark closes the Roman run.
+/// Unit encoders include their ordinary terminator so standalone/end/Korean
+/// boundaries stay unchanged; this helper applies only at the actual following
+/// input boundary.
+fn omit_roman_terminator_before_boundary(
+    encoded: &mut Vec<u8>,
+    word: &[char],
+    boundary_index: usize,
+) {
+    if word
+        .get(boundary_index)
+        .is_some_and(|symbol| crate::english_logic::should_skip_terminator_for_symbol(*symbol))
+        && encoded.last() == Some(&crate::unicode::decode_unicode('⠲'))
+    {
+        encoded.pop();
+    }
+}
+
 fn should_insert_separator_after_symbol(symbol: char, next: Option<char>) -> bool {
     SEPARATED_SYMBOLS.contains(&symbol) && next.is_some_and(crate::utils::is_korean_char)
 }
@@ -313,8 +332,10 @@ impl BrailleRule for Rule69 {
     fn apply(&self, ctx: &mut RuleContext) -> Result<RuleResult, String> {
         if matches!(ctx.char_type, CharType::Number(_))
             && ctx.index == 0
-            && let Some((numeric, unit, consumed)) = parse_numeric_ascii_unit_prefix(ctx.word_chars)
+            && let Some((numeric, mut unit, consumed)) =
+                parse_numeric_ascii_unit_prefix(ctx.word_chars)
         {
+            omit_roman_terminator_before_boundary(&mut unit, ctx.word_chars, consumed);
             let mut encoded = crate::encode(&numeric)?;
             encoded.extend(unit);
             ctx.emit_slice(&encoded);
@@ -327,8 +348,13 @@ impl BrailleRule for Rule69 {
         if matches!(ctx.char_type, CharType::English(_))
             && (is_numeric_or_unit_context(ctx)
                 || (ctx.index == 0 && word_looks_like_unit_chain(ctx.word_chars)))
-            && let Some((encoded, consumed)) = encode_ascii_unit(ctx.word_chars, ctx.index)
+            && let Some((mut encoded, consumed)) = encode_ascii_unit(ctx.word_chars, ctx.index)
         {
+            omit_roman_terminator_before_boundary(
+                &mut encoded,
+                ctx.word_chars,
+                ctx.index + consumed,
+            );
             trim_recent_english_indicator(ctx.result);
             ctx.emit_slice(&encoded);
             ctx.state.is_english = false;
@@ -370,6 +396,12 @@ impl BrailleRule for Rule69 {
                 encoded.extend(encode_unicode_cells("⠍"));
             }
 
+            omit_roman_terminator_before_boundary(
+                &mut encoded,
+                ctx.word_chars,
+                ctx.index + consumed,
+            );
+
             ctx.emit_slice(&encoded);
             ctx.state.is_english = false;
             ctx.state.needs_english_continuation = false;
@@ -380,8 +412,9 @@ impl BrailleRule for Rule69 {
         if let Some(parts) = compatibility_unit_decomposition(ctx.current_char()) {
             let continues_from_previous = roman_unit_chain_continues_before(ctx);
             let continues_after = roman_unit_chain_continues_after(ctx);
-            let encoded =
+            let mut encoded =
                 encode_compatibility_unit(&parts, !continues_from_previous, !continues_after)?;
+            omit_roman_terminator_before_boundary(&mut encoded, ctx.word_chars, ctx.index + 1);
             ctx.emit_slice(&encoded);
             ctx.state.is_english = false;
             ctx.state.needs_english_continuation = false;
@@ -395,7 +428,8 @@ impl BrailleRule for Rule69 {
             .iter()
             .find(|(candidate, _)| *candidate == ctx.current_char())
             .expect("matches() guarantees the char is in SINGLE_MAPPINGS");
-        let encoded = encode_unicode_cells(unicode);
+        let mut encoded = encode_unicode_cells(unicode);
+        omit_roman_terminator_before_boundary(&mut encoded, ctx.word_chars, ctx.index + 1);
         ctx.emit_slice(&encoded);
         if should_insert_separator_after_symbol(ctx.current_char(), ctx.next_char()) {
             ctx.emit(0);
@@ -408,7 +442,8 @@ impl BrailleRule for Rule69 {
 mod tests {
     use super::{
         Rule69, compatibility_unit_decomposition, encode_ascii_unit, encode_compatibility_unit,
-        encode_percent_abbreviation, encode_rule_69_unit_letters, parse_numeric_ascii_unit_prefix,
+        encode_percent_abbreviation, encode_rule_69_unit_letters, encode_unicode_cells,
+        omit_roman_terminator_before_boundary, parse_numeric_ascii_unit_prefix,
         word_looks_like_unit_chain,
     };
 
@@ -539,6 +574,57 @@ mod tests {
     #[case::kilometres_per_hour("80 ㎞/시", "⠼⠓⠚⠀⠴⠅⠍⠲⠸⠌⠠⠕")]
     fn preserves_pdf_unit_examples(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    /// Rules 33/34/69: the ordinary unit terminator is omitted only when the
+    /// actual following boundary is one of the standard's punctuation/enclosing
+    /// marks. These are full-encoder checks, including numeric-prefix routing.
+    #[rstest::rstest]
+    #[case::kilogram_in_parentheses("상자(20kg)당", "⠼⠃⠚⠴⠅⠛⠠⠴", "⠴⠅⠛⠲⠠⠴")]
+    #[case::centimetre_before_korean_comma("키는 173cm, 몸무게는", "⠼⠁⠛⠉⠴⠉⠍⠐", "⠴⠉⠍⠲⠐")]
+    #[case::centimetre_before_next_measurement("키 173cm, 68kg", "⠼⠁⠛⠉⠴⠉⠍⠂", "⠴⠉⠍⠲⠂")]
+    #[case::metre_before_sentence_period("비거리 130m.", "⠼⠁⠉⠚⠴⠍⠲", "⠴⠍⠲⠲")]
+    #[case::compatibility_kilogram_in_parentheses("상자(20㎏)당", "⠼⠃⠚⠴⠅⠛⠠⠴", "⠴⠅⠛⠲⠠⠴")]
+    fn omits_unit_terminator_at_rule_33_or_34_boundary(
+        #[case] input: &str,
+        #[case] expected_segment: &str,
+        #[case] forbidden_segment: &str,
+    ) {
+        let actual = crate::encode_to_unicode(input).unwrap();
+        assert!(
+            actual.contains(expected_segment),
+            "missing rule-33/34 unit boundary {expected_segment:?} in {actual:?}"
+        );
+        assert!(
+            !actual.contains(forbidden_segment),
+            "unexpected rule-69 terminator at rule-33/34 boundary {forbidden_segment:?} in {actual:?}"
+        );
+    }
+
+    /// Rule 69 remains the default outside the rule-33/34 override. End of
+    /// input, a following Korean syllable, and forced slash boundaries retain
+    /// the ordinary Roman terminator.
+    #[rstest::rstest]
+    #[case::end_of_input("180cm", "⠴⠉⠍⠲")]
+    #[case::before_korean("1m는", "⠴⠍⠲")]
+    #[case::before_forced_slash("3m/시", "⠴⠍⠲⠸⠌")]
+    fn retains_unit_terminator_at_ordinary_rule_69_boundary(
+        #[case] input: &str,
+        #[case] expected_segment: &str,
+    ) {
+        let actual = crate::encode_to_unicode(input).unwrap();
+        assert!(
+            actual.contains(expected_segment),
+            "missing ordinary rule-69 unit boundary {expected_segment:?} in {actual:?}"
+        );
+    }
+
+    #[test]
+    fn boundary_helper_does_not_remove_non_terminator_cells() {
+        let word = "kg)".chars().collect::<Vec<_>>();
+        let mut encoded = encode_unicode_cells("⠴⠅⠛");
+        omit_roman_terminator_before_boundary(&mut encoded, &word, 2);
+        assert_eq!(encoded, encode_unicode_cells("⠴⠅⠛"));
     }
 
     #[test]
