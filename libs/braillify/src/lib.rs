@@ -1203,6 +1203,15 @@ mod test {
         input: String,
         target: String,
         unicode: String,
+        world: Option<String>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct CorpusStatus {
+        total: usize,
+        braillify_fail: usize,
+        world_total: usize,
+        world_fail: usize,
     }
 
     #[derive(Default)]
@@ -1233,6 +1242,44 @@ mod test {
         stats.contains_delimiters += usize::from(contains_delimiters);
         stats.korean_text_only +=
             usize::from(!contains_latin && !contains_digits && !contains_delimiters);
+    }
+
+    /// Writes the corpus aggregate consumed by the statically exported test-case page.
+    /// This is intentionally separate from the PDF-rule fixture status: the NIKL corpus
+    /// uses Unicode references and is an accuracy benchmark rather than a pass/fail gate.
+    fn write_nikl_corpus_status() {
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test_cases/corpus/sentence.json"
+        ));
+        let cases: Vec<NiklCorpusCase> =
+            serde_json::from_reader(File::open(path).expect("NIKL corpus fixture must exist"))
+                .expect("NIKL corpus fixture must be valid JSON");
+        let braille_blank = encode_unicode(0).to_string();
+        let mut braillify_fail = 0;
+        let mut world_total = 0;
+        let mut world_fail = 0;
+
+        for case in &cases {
+            if encode_to_unicode(&case.input).as_deref() != Ok(case.unicode.as_str()) {
+                braillify_fail += 1;
+            }
+            if let Some(world) = case.world.as_deref().filter(|world| !world.is_empty()) {
+                world_total += 1;
+                if world.replace(' ', &braille_blank) != case.unicode {
+                    world_fail += 1;
+                }
+            }
+        }
+
+        let status = CorpusStatus {
+            total: cases.len(),
+            braillify_fail,
+            world_total,
+            world_fail,
+        };
+        let status_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus_status.json");
+        serde_json::to_writer_pretty(File::create(status_path).unwrap(), &status).unwrap();
     }
 
     /// NIKL Korean–Korean Braille Parallel Corpus (2025 v1.0) regression suite.
@@ -1317,6 +1364,7 @@ mod test {
 
     #[test]
     pub fn test_by_testcase() {
+        write_nikl_corpus_status();
         let files = collect_test_files();
         let mut total = 0;
         let mut failed = 0;

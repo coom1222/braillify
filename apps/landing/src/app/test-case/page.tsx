@@ -39,7 +39,13 @@ import {
 import type { TestStatusMap } from '@/types'
 
 const CORPUS_FILTER_KEY = 'corpus/nikl_2025'
-const CORPUS_BRAILLIFY_MATCH = 57_732
+
+interface CorpusStatus {
+  total: number
+  braillify_fail: number
+  world_total: number
+  world_fail: number
+}
 
 export const metadata: Metadata = {
   title: '테스트 케이스 - 한국·영어 점자 표준 검증',
@@ -88,7 +94,7 @@ export const metadata: Metadata = {
 }
 
 export default async function TestCasePage() {
-  const [testStatus, ruleMap, corpus] = await Promise.all([
+  const [testStatus, ruleMap, corpus, corpusStatus] = await Promise.all([
     readFile('../../test_status.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<TestStatusMap>,
@@ -98,6 +104,9 @@ export default async function TestCasePage() {
     readFile('../../test_cases/corpus/sentence.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<Array<{ input: string; unicode: string; world?: string }>>,
+    readFile('../../corpus_status.json', 'utf-8').then((data) =>
+      JSON.parse(data),
+    ) as Promise<CorpusStatus>,
   ])
 
   // Dynamically create filter map based on rule_map keys
@@ -114,17 +123,14 @@ export default async function TestCasePage() {
       },
     ]),
   ) as FilterTotalMap
-  const corpusWorldMatch = corpus.filter(
-    ({ unicode, world }) => world?.replaceAll(' ', '⠀') === unicode,
-  ).length
   filterTotalMap.corpus = {
     braillify: {
-      total: corpus.length,
-      fail: corpus.length - CORPUS_BRAILLIFY_MATCH,
+      total: corpusStatus.total,
+      fail: corpusStatus.braillify_fail,
     },
     world: {
-      total: corpus.length,
-      fail: corpus.length - corpusWorldMatch,
+      total: corpusStatus.world_total,
+      fail: corpusStatus.world_fail,
     },
     jeomsarang: { total: 0, fail: 0 },
   }
@@ -419,10 +425,12 @@ export default async function TestCasePage() {
             <TestCaseDisplayBoundary option="filters" value={CORPUS_FILTER_KEY}>
               <TestCaseRuleContainer exception={false}>
                 <CorpusTestCaseSection
-                  braillifyMatch={CORPUS_BRAILLIFY_MATCH}
+                  braillifyMatch={
+                    corpusStatus.total - corpusStatus.braillify_fail
+                  }
                   samples={corpusSamples}
-                  total={corpus.length}
-                  worldMatch={corpusWorldMatch}
+                  total={corpusStatus.total}
+                  worldMatch={corpusStatus.world_total - corpusStatus.world_fail}
                 />
               </TestCaseRuleContainer>
             </TestCaseDisplayBoundary>

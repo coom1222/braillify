@@ -4,6 +4,7 @@ target/
 node_modules
 .df
 test_status.json
+corpus_status.json
 .venv
 __pycache__
 .pytest_cache
