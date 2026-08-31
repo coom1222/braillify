@@ -1432,16 +1432,23 @@ fn first_difference_in_inline_parenthesized_operator(item: &EncodedCase) -> bool
         .any(|range| range.contains(&first_difference))
 }
 
-fn tight_triangle_positions(input: &str) -> Vec<usize> {
+fn tight_triangle_spans(input: &str) -> Vec<InputSpan> {
     input
         .match_indices('△')
         .filter_map(|(byte, mark)| {
-            input[byte + mark.len()..]
-                .chars()
-                .next()
-                .is_some_and(is_korean_script)
-                .then_some(byte)
+            let next = input[byte + mark.len()..].chars().next()?;
+            is_korean_script(next).then_some(InputSpan {
+                start_byte: byte,
+                end_byte: byte + mark.len() + next.len_utf8(),
+            })
         })
+        .collect()
+}
+
+fn tight_triangle_positions(input: &str) -> Vec<usize> {
+    tight_triangle_spans(input)
+        .into_iter()
+        .map(|span| span.start_byte)
         .collect()
 }
 
@@ -1449,25 +1456,7 @@ fn tight_triangle_positions(input: &str) -> Vec<usize> {
 /// the mark. A missing reference space therefore differs inside this range,
 /// while unrelated earlier sentence differences do not count as causal.
 fn tight_triangle_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
-    let actual_cells = actual.chars().collect::<Vec<_>>();
-    let marker = braillify::encode_to_unicode("△")
-        .expect("triangle probe must encode")
-        .chars()
-        .collect::<Vec<_>>();
-    tight_triangle_positions(input)
-        .into_iter()
-        .filter_map(|byte| {
-            let start = braillify::encode_to_unicode(&input[..byte])
-                .ok()?
-                .chars()
-                .count();
-            let marker_end = start.checked_add(marker.len())?;
-            let range_end = marker_end.checked_add(1)?;
-            (actual_cells.get(start..marker_end) == Some(marker.as_slice())
-                && actual_cells.get(marker_end).is_some())
-            .then_some(start..range_end)
-        })
-        .collect()
+    korean_context_signature_ranges(input, actual, &tight_triangle_spans(input), 0)
 }
 
 fn first_difference_in_tight_triangle(item: &EncodedCase) -> bool {
@@ -2472,7 +2461,11 @@ fn markdown(report: &AnalysisReport) -> String {
          assigns the same glyph a bullet role but shows a print space after every bullet. A tight \
          corpus input does not identify which role was intended, and adding a space absent from \
          the input would contradict rule 49 unless independent layout evidence establishes a \
-         bullet. Localized mismatches are therefore corpus/layout review evidence only.\n\n\
+         bullet. The localizer searches the complete actual output for a neutral-Korean, \
+         current-engine signature covering the mark and its first following Korean character; \
+         it neither encodes a context-sensitive sentence prefix in isolation nor reads the \
+         reference output. Tight marks followed by ASCII letters or digits remain outside this \
+         gate. Localized mismatches are therefore corpus/layout review evidence only.\n\n\
          Corpus contradictions remain a separate gate: identical inputs with conflicting \
          references are classified as `corpus_suspect` before these cohorts are recorded and \
          would appear explicitly in each mismatch primary-class distribution. Their absence does \
@@ -3647,9 +3640,11 @@ mod tests {
         assert_eq!(tight_triangle_positions(input).len(), expected);
     }
 
-    #[test]
-    fn locates_tight_triangle_and_first_korean_output() {
-        let input = "△보성군";
+    #[rstest::rstest]
+    #[case::leading("△보성군")]
+    #[case::embedded("목록 △교과전형")]
+    #[case::after_roman_context("MOU 협약 뒤 △항목")]
+    fn locates_tight_triangle_and_first_korean_output(#[case] input: &str) {
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = tight_triangle_actual_ranges(input, &actual);
 
