@@ -1,6 +1,7 @@
 param(
     [string]$ArchivePath = (Join-Path $PSScriptRoot '..\NIKL_Korean-Korean_Braille_Parallel_Corpus_2025_v1.0.zip'),
-    [string]$OutputPath = (Join-Path $PSScriptRoot '..\test_cases\corpus\sentence.json')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\test_cases\corpus'),
+    [int]$ChunkSize = 25000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,8 +11,16 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $pattern = ' a1b''k2l@cif/msp"e3h9o6r^djg>ntq,*5<-u8v.%[$+x!&;:4\0z7(_?w]#y)='
 $existingWorld = @{}
 $existingWorldByInput = @{}
-if (Test-Path -LiteralPath $OutputPath) {
-    $existingCases = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
+$existingPaths = @()
+$legacyPath = Join-Path $OutputDirectory 'sentence.json'
+if (Test-Path -LiteralPath $legacyPath) {
+    $existingPaths += $legacyPath
+}
+if (Test-Path -LiteralPath $OutputDirectory) {
+    $existingPaths += @(Get-ChildItem -LiteralPath $OutputDirectory -Filter 'sentence_*.json' -File | ForEach-Object FullName)
+}
+foreach ($existingPath in $existingPaths) {
+    $existingCases = Get-Content -LiteralPath $existingPath -Raw | ConvertFrom-Json
     foreach ($case in $existingCases) {
         if ($case.id -and $null -ne $case.world) {
             $existingWorld[[string]$case.id] = [string]$case.world
@@ -72,13 +81,23 @@ finally {
     $archive.Dispose()
 }
 
-$outputDirectory = Split-Path -Parent $OutputPath
-[System.IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
+[System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+$writtenPaths = @()
+$shardCount = [Math]::Ceiling($cases.Count / $ChunkSize)
+for ($shardIndex = 0; $shardIndex -lt $shardCount; $shardIndex++) {
+    $offset = $shardIndex * $ChunkSize
+    $count = [Math]::Min($ChunkSize, $cases.Count - $offset)
+    $shardPath = Join-Path $OutputDirectory ('sentence_{0:D2}.json' -f ($shardIndex + 1))
+    [System.IO.File]::WriteAllText(
+        $shardPath,
+        ($cases.GetRange($offset, $count) | ConvertTo-Json -Depth 3),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $writtenPaths += $shardPath
+}
 
-[System.IO.File]::WriteAllText(
-    $OutputPath,
-    ($cases | ConvertTo-Json -Depth 3),
-    [System.Text.UTF8Encoding]::new($false)
-)
+Get-ChildItem -LiteralPath $OutputDirectory -Filter 'sentence_*.json' -File |
+    Where-Object FullName -NotIn $writtenPaths |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName }
 
-Write-Host "Imported $($cases.Count) NIKL parallel corpus records into $OutputPath"
+Write-Host "Imported $($cases.Count) NIKL parallel corpus records into $shardCount shards"

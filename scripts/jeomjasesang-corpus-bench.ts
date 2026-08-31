@@ -1,10 +1,10 @@
 /** Reports 점자세상 exact-match accuracy against the NIKL corpus reference. */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '..')
-const CORPUS_PATH = join(ROOT, 'test_cases', 'corpus', 'sentence.json')
+const CORPUS_DIRECTORY = join(ROOT, 'test_cases', 'corpus')
 const REPORT_PATH = join(ROOT, 'bench', 'JEOMJASESANG_CORPUS_BENCH.md')
 const BRAILLE_BLANK = '\u2800'
 
@@ -31,7 +31,19 @@ function stripOuterEnglishMarkers(value: string, input: string): string {
 }
 
 async function main(): Promise<void> {
-  const corpus = JSON.parse(await readFile(CORPUS_PATH, 'utf8')) as CorpusCase[]
+  const corpusFiles = (await readdir(CORPUS_DIRECTORY))
+    .filter((file) => /^sentence_\d+\.json$/.test(file))
+    .sort()
+  const corpus = (
+    await Promise.all(
+      corpusFiles.map(
+        async (file) =>
+          JSON.parse(
+            await readFile(join(CORPUS_DIRECTORY, file), 'utf8'),
+          ) as CorpusCase[],
+      ),
+    )
+  ).flat()
   let match = 0
   let mismatch = 0
   let missing = 0

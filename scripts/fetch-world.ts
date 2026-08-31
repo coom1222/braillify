@@ -274,10 +274,35 @@ async function main(): Promise<void> {
   )
 
   if (corpusMode) {
-    const corpusPath = join(TEST_CASES_DIR, 'corpus', 'sentence.json')
+    const corpusDirectory = join(TEST_CASES_DIR, 'corpus')
+    const corpusFiles = (await readdir(corpusDirectory))
+      .filter((file) => /^sentence_\d+\.json$/.test(file))
+      .sort()
     const limit = Number.parseInt(process.env.JEOMJASESANG_LIMIT ?? '', 10)
-    console.log('\n📁 corpus/sentence.json (NIKL → world)')
-    const stats = await processFile(corpusPath, ref, 'world', limit, true)
+    const stats: FileStats = {
+      total: 0,
+      fetched: 0,
+      skipped: 0,
+      preserved: 0,
+      errors: 0,
+    }
+    console.log(`\n📁 corpus (${corpusFiles.length} shards, NIKL → world)`)
+    for (const file of corpusFiles) {
+      const remaining = Number.isNaN(limit)
+        ? limit
+        : Math.max(0, limit - stats.fetched)
+      if (remaining === 0) break
+      const fileStats = await processFile(
+        join(corpusDirectory, file),
+        ref,
+        'world',
+        remaining,
+        true,
+      )
+      for (const key of Object.keys(stats) as (keyof FileStats)[]) {
+        stats[key] += fileStats[key]
+      }
+    }
     console.log(
       `✅ ${stats.fetched} fetched, ${stats.skipped} skipped, ${stats.errors} errors${stats.preserved > 0 ? `, ${stats.preserved} preserved` : ''} (${stats.total} total)`,
     )

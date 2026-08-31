@@ -1206,6 +1206,38 @@ mod test {
         world: Option<String>,
     }
 
+    fn load_nikl_corpus_cases() -> Vec<NiklCorpusCase> {
+        let directory = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test_cases/corpus"
+        ));
+        let mut paths = std::fs::read_dir(directory)
+            .expect("NIKL corpus directory must exist")
+            .map(|entry| {
+                entry
+                    .expect("NIKL corpus directory entry must be readable")
+                    .path()
+            })
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("sentence_") && name.ends_with(".json"))
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert!(!paths.is_empty(), "NIKL corpus shards must exist");
+
+        let mut cases = Vec::new();
+        for path in paths {
+            let mut shard: Vec<NiklCorpusCase> = serde_json::from_reader(
+                File::open(&path).expect("NIKL corpus shard must be readable"),
+            )
+            .unwrap_or_else(|error| panic!("{} must be valid JSON: {error}", path.display()));
+            cases.append(&mut shard);
+        }
+        cases
+    }
+
     type TestStatusRow = (
         String,
         String,
@@ -1252,13 +1284,7 @@ mod test {
     /// Corpus mismatches are benchmark data, so they do not fail the PDF-rule test.
     fn collect_nikl_corpus_status() -> (usize, usize, usize, usize, usize, usize, Vec<TestStatusRow>)
     {
-        let path = std::path::Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test_cases/corpus/sentence.json"
-        ));
-        let cases: Vec<NiklCorpusCase> =
-            serde_json::from_reader(File::open(path).expect("NIKL corpus fixture must exist"))
-                .expect("NIKL corpus fixture must be valid JSON");
+        let cases = load_nikl_corpus_cases();
         let braille_blank = encode_unicode(0).to_string();
         let mut braillify_fail = 0;
         let mut world_total = 0;
@@ -1324,13 +1350,7 @@ mod test {
     /// `encode_to_unicode` returns.
     #[test]
     fn test_nikl_parallel_corpus() {
-        let path = std::path::Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test_cases/corpus/sentence.json"
-        ));
-        let cases: Vec<NiklCorpusCase> =
-            serde_json::from_reader(File::open(path).expect("NIKL corpus fixture must exist"))
-                .expect("NIKL corpus fixture must be valid JSON");
+        let cases = load_nikl_corpus_cases();
         assert!(!cases.is_empty(), "NIKL corpus fixture must not be empty");
 
         let mut failures = Vec::new();
