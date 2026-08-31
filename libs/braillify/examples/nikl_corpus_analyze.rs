@@ -11,6 +11,7 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
@@ -141,6 +142,7 @@ struct AnalysisReport {
     exact: usize,
     mismatch: usize,
     exact_percent: f64,
+    analysis_wall_time_ms: u128,
     duplicate_inputs: usize,
     conflicting_duplicate_inputs: usize,
     primary_classes: BTreeMap<String, usize>,
@@ -268,9 +270,34 @@ fn validate_corpus_shape(shard_count: usize, case_count: usize) -> Result<(), St
     Ok(())
 }
 
+fn singleton_unsupported_set_with(
+    cases: &[LocatedCase],
+    mut fails_alone: impl FnMut(char) -> bool,
+) -> BTreeSet<char> {
+    cases
+        .iter()
+        .flat_map(|located| located.case.input.chars())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|ch| fails_alone(*ch))
+        .collect()
+}
+
+fn singleton_unsupported_set(cases: &[LocatedCase]) -> BTreeSet<char> {
+    singleton_unsupported_set_with(cases, |ch| {
+        braillify::encode_to_unicode(&ch.to_string()).is_err()
+    })
+}
+
 fn encode_cases(cases: &[LocatedCase], thread_count: usize) -> Vec<EncodedCase> {
+    // Compute singleton support exactly once per distinct corpus character.
+    // `BTreeSet` keeps both probing and report assignment deterministic; workers
+    // only perform membership lookups instead of re-encoding common marks such
+    // as `㈜` hundreds of times across error sentences.
+    let singleton_unsupported = singleton_unsupported_set(cases);
     let chunk_size = cases.len().div_ceil(thread_count);
     let mut chunks = thread::scope(|scope| {
+        let singleton_unsupported = &singleton_unsupported;
         cases
             .chunks(chunk_size.max(1))
             .map(|chunk| {
@@ -287,9 +314,7 @@ fn encode_cases(cases: &[LocatedCase], thread_count: usize) -> Vec<EncodedCase> 
                                     .chars()
                                     .collect::<BTreeSet<_>>()
                                     .into_iter()
-                                    .filter(|ch| {
-                                        braillify::encode_to_unicode(&ch.to_string()).is_err()
-                                    })
+                                    .filter(|ch| singleton_unsupported.contains(ch))
                                     .collect()
                             } else {
                                 Vec::new()
@@ -740,6 +765,7 @@ fn analyze(
         exact,
         mismatch: total - exact,
         exact_percent: exact as f64 / total as f64 * 100.0,
+        analysis_wall_time_ms: 0,
         duplicate_inputs,
         conflicting_duplicate_inputs: conflicting.len(),
         primary_classes,
@@ -770,6 +796,10 @@ fn markdown(report: &AnalysisReport) -> String {
     text.push_str(&format!(
         "| Exact accuracy | {:.2}% |\n",
         report.exact_percent
+    ));
+    text.push_str(&format!(
+        "| Analysis wall time | {:.3} s |\n",
+        report.analysis_wall_time_ms as f64 / 1000.0
     ));
     text.push_str(&format!(
         "| Duplicate records | {} |\n",
@@ -1034,19 +1064,22 @@ fn write_file(path: &Path, contents: &str) -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
+    let started = Instant::now();
     let config = Config::parse()?;
     let cases = load_cases()?;
     let encoded = encode_cases(&cases, config.threads);
-    let report = analyze(cases, encoded, config.sample_limit);
+    let mut report = analyze(cases, encoded, config.sample_limit);
+    report.analysis_wall_time_ms = started.elapsed().as_millis();
     let json = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("cannot serialize analysis JSON: {error}"))?;
     write_file(&config.json_path, &json)?;
     write_file(&config.report_path, &markdown(&report))?;
     println!(
-        "NIKL corpus: {}/{} exact ({:.2}%), report={}, json={}",
+        "NIKL corpus: {}/{} exact ({:.2}%), wall={:.3}s, report={}, json={}",
         report.exact,
         report.total,
         report.exact_percent,
+        report.analysis_wall_time_ms as f64 / 1000.0,
         config.report_path.display(),
         config.json_path.display()
     );
@@ -1078,6 +1111,32 @@ mod tests {
             Some(expected) => assert!(result.unwrap_err().contains(expected)),
             None => assert_eq!(result, Ok(())),
         }
+    }
+
+    #[test]
+    fn singleton_cache_probes_each_distinct_corpus_character_once() {
+        let cases = ["㈜Aℓ", "㈜Bℓ"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, input)| LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: String::new(),
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut calls = BTreeMap::<char, usize>::new();
+
+        let unsupported = singleton_unsupported_set_with(&cases, |ch| {
+            *calls.entry(ch).or_insert(0) += 1;
+            matches!(ch, '㈜' | 'ℓ')
+        });
+
+        assert_eq!(unsupported, BTreeSet::from(['ℓ', '㈜']));
+        assert_eq!(calls.len(), 4);
+        assert!(calls.values().all(|count| *count == 1));
     }
 
     #[rstest::rstest]
