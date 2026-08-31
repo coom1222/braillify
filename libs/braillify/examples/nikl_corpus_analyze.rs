@@ -136,6 +136,24 @@ struct EncodingErrorAudit {
 }
 
 #[derive(Debug, Serialize)]
+struct PendingRuleReviewClusterSample {
+    shard: String,
+    index: usize,
+    input: String,
+    primary_class: String,
+    reason: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct PendingRuleReviewClusterStats {
+    candidates: usize,
+    exact: usize,
+    mismatch: usize,
+    mismatch_primary_classes: BTreeMap<String, usize>,
+    samples: BTreeMap<String, Vec<PendingRuleReviewClusterSample>>,
+}
+
+#[derive(Debug, Serialize)]
 struct AnalysisReport {
     corpus: &'static str,
     total: usize,
@@ -151,6 +169,9 @@ struct AnalysisReport {
     singleton_error_characters: BTreeMap<String, ErrorCharacterStats>,
     encoding_error_audit: EncodingErrorAudit,
     rule_36_transition_audit: Rule36TransitionAudit,
+    // Cross-cutting input cohorts; only members whose existing primary class
+    // is PendingRuleReview are pending-rule-review subclusters.
+    pending_rule_review_clusters: BTreeMap<String, PendingRuleReviewClusterStats>,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -519,6 +540,48 @@ fn is_delimiter_or_quote(ch: char) -> bool {
     )
 }
 
+const UPPERCASE_ROMAN_HEADWORD_EXPANSION: &str =
+    "uppercase_roman_headword_closed_multiword_parenthetical";
+
+/// Input-only candidate gate for acronym expansions such as
+/// `HCA(Home Connectivity Alliance)`.
+///
+/// This is deliberately an analyzer diagnostic, not an engine rule. Requiring
+/// only ASCII letters and spaces inside the closed parenthesis also excludes
+/// visible operators, subscript/superscript notation, and nested parentheses.
+fn has_uppercase_roman_headword_expansion(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    for (open, _) in input.match_indices('(') {
+        let mut headword_start = open;
+        while headword_start > 0 && bytes[headword_start - 1].is_ascii_alphabetic() {
+            headword_start -= 1;
+        }
+        let headword = &input[headword_start..open];
+        if headword.len() < 2 || !headword.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            continue;
+        }
+
+        let parenthetical_tail = &input[open + 1..];
+        let Some(close) = parenthetical_tail.find(')') else {
+            continue;
+        };
+        let contents = &parenthetical_tail[..close];
+        if contents.is_empty()
+            || contents.trim_matches(' ') != contents
+            || !contents
+                .bytes()
+                .all(|byte| byte.is_ascii_alphabetic() || byte == b' ')
+        {
+            continue;
+        }
+
+        if contents.split_ascii_whitespace().count() >= 2 {
+            return true;
+        }
+    }
+    false
+}
+
 fn enum_key<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .expect("enum serialization must succeed")
@@ -609,6 +672,10 @@ fn analyze(
     let mut shards = BTreeMap::<String, ShardStats>::new();
     let mut samples = BTreeMap::<String, Vec<Sample>>::new();
     let mut rule_36_transition_audit = Rule36TransitionAudit::default();
+    let mut pending_rule_review_clusters = BTreeMap::from([(
+        UPPERCASE_ROMAN_HEADWORD_EXPANSION.to_string(),
+        PendingRuleReviewClusterStats::default(),
+    )]);
     let mut exact = 0usize;
 
     for item in &encoded {
@@ -641,8 +708,36 @@ fn analyze(
         }
         let primary_key = enum_key(&primary);
         let reason_key = enum_key(&reason);
-        *primary_classes.entry(primary_key).or_insert(0) += 1;
+        *primary_classes.entry(primary_key.clone()).or_insert(0) += 1;
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
+
+        if has_uppercase_roman_headword_expansion(&item.located.case.input) {
+            let stats = pending_rule_review_clusters
+                .get_mut(UPPERCASE_ROMAN_HEADWORD_EXPANSION)
+                .expect("registered pending-rule-review cluster must exist");
+            stats.candidates += 1;
+            let outcome = if primary == PrimaryClass::Exact {
+                stats.exact += 1;
+                "exact"
+            } else {
+                stats.mismatch += 1;
+                *stats
+                    .mismatch_primary_classes
+                    .entry(primary_key.clone())
+                    .or_insert(0) += 1;
+                "mismatch"
+            };
+            let bucket = stats.samples.entry(outcome.to_string()).or_default();
+            if bucket.len() < sample_limit {
+                bucket.push(PendingRuleReviewClusterSample {
+                    shard: item.located.shard.clone(),
+                    index: item.located.index,
+                    input: item.located.case.input.clone(),
+                    primary_class: primary_key.clone(),
+                    reason: reason_key.clone(),
+                });
+            }
+        }
 
         let shard = shards.entry(item.located.shard.clone()).or_default();
         shard.total += 1;
@@ -773,6 +868,7 @@ fn analyze(
         singleton_error_characters,
         encoding_error_audit,
         rule_36_transition_audit,
+        pending_rule_review_clusters,
         overlapping_traits: traits,
         shards,
         samples,
@@ -826,6 +922,73 @@ fn markdown(report: &AnalysisReport) -> String {
     for (name, count) in &report.reasons {
         text.push_str(&format!("| `{name}` | {count} |\n"));
     }
+
+    text.push_str("\n## Cross-cutting input-only structural cohorts\n\n");
+    text.push_str(
+        "These are cross-cutting input-only structural cohorts, not new primary classes and not \
+         engine routing rules. Candidate selection never changes a case's existing primary \
+         class. Only cohort members already classified as `pending_rule_review` form a pending \
+         subcluster; exact and other-primary members are controls that retain their existing \
+         outcomes. The \
+         `uppercase_roman_headword_closed_multiword_parenthetical` gate requires a two-or-more \
+         character uppercase ASCII headword immediately followed by a closed parenthesis whose \
+         contents are two or more ASCII Roman words separated only by spaces. Because the \
+         contents admit only letters and spaces, visible operators, subscript/superscript \
+         notation, and nested parentheses are excluded deterministically.\n\n",
+    );
+    text.push_str("| Cluster | Candidates | Exact | Mismatch |\n|---|---:|---:|---:|\n");
+    for (name, stats) in &report.pending_rule_review_clusters {
+        text.push_str(&format!(
+            "| `{name}` | {} | {} | {} |\n",
+            stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    for (name, stats) in &report.pending_rule_review_clusters {
+        text.push_str(&format!("\n### `{name}`\n\n"));
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "Of the {} candidates, {pending} are the actual `pending_rule_review` subcluster. \
+             The other {} candidates are exact or existing non-pending-primary controls; this \
+             cohort does not reclassify them.\n\n",
+            stats.candidates,
+            stats.candidates - pending
+        ));
+        text.push_str("Mismatch primary-class distribution:\n\n");
+        for (primary, count) in &stats.mismatch_primary_classes {
+            text.push_str(&format!("- `{primary}`: {count}\n"));
+        }
+        for (outcome, samples) in &stats.samples {
+            text.push_str(&format!("\nRepresentative `{outcome}` samples:\n\n"));
+            for sample in samples {
+                text.push_str(&format!(
+                    "- `{}` #{}: {}\n  - current primary/reason: `{}` / `{}`\n",
+                    sample.shard,
+                    sample.index,
+                    sample
+                        .input
+                        .chars()
+                        .take(180)
+                        .collect::<String>()
+                        .replace('`', "\\`"),
+                    sample.primary_class,
+                    sample.reason
+                ));
+            }
+        }
+    }
+    text.push_str(
+        "\nThis shape is not an engine implementation premise. The 2024 PDF's math rule 6 \
+         defines parentheses and grouping parentheses, rule 11 defines mathematical-expression \
+         spacing, rule 12 covers Roman letters in formulas as well as Korean sentences, and \
+         rule 45 shows Roman-letter function notation followed by parentheses. Excluding visible \
+         operators, scripts, and nesting narrows this corpus cohort, but the PDF does not make \
+         the remaining surface shape sufficient to rule out every mathematical counterexample. \
+         The cluster therefore remains conservative pending-review evidence only.\n",
+    );
 
     text.push_str("\n## Encoding-error diagnostics\n\n");
     text.push_str(
@@ -1269,5 +1432,59 @@ mod tests {
     #[test]
     fn roman_indicator_moves_before_capital_word_indicator() {
         assert_eq!(roman_before_capital_order("⠠⠠⠴⠁⠃"), "⠴⠠⠠⠁⠃");
+    }
+
+    #[rstest::rstest]
+    #[case::hca("HCA(Home Connectivity Alliance)", true)]
+    #[case::embedded_in_korean("협회 HCA(Home Connectivity Alliance)는", true)]
+    #[case::lowercase_headword("Hca(Home Connectivity Alliance)", false)]
+    #[case::single_word_parenthetical("HCA(Alliance)", false)]
+    #[case::unclosed_parenthetical("HCA(Home Connectivity Alliance", false)]
+    #[case::operator_inside("AB(C + D)", false)]
+    #[case::subscript_inside("AB(C D_1)", false)]
+    #[case::nested_parenthetical("AB(C (D E))", false)]
+    fn detects_uppercase_roman_headword_expansion(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(has_uppercase_roman_headword_expansion(input), expected);
+    }
+
+    #[test]
+    fn aggregates_headword_expansion_outcomes_without_reclassification() {
+        let cases = [
+            ("HCA(Home Connectivity Alliance)", "exact", "exact"),
+            ("WHO(World Health Organization)", "expected", "actual"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(offset, (input, expected, actual))| {
+            let located = LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: offset + 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected.to_string(),
+                },
+            };
+            let encoded = EncodedCase {
+                located: located.clone(),
+                actual: Ok(actual.to_string()),
+                nfc_actual: None,
+                nfkc_actual: None,
+                singleton_unsupported_characters: Vec::new(),
+            };
+            (located, encoded)
+        })
+        .collect::<Vec<_>>();
+        let (located, encoded): (Vec<_>, Vec<_>) = cases.into_iter().unzip();
+
+        let report = analyze(located, encoded, 5);
+        let stats = report
+            .pending_rule_review_clusters
+            .get(UPPERCASE_ROMAN_HEADWORD_EXPANSION)
+            .unwrap();
+
+        assert_eq!((stats.candidates, stats.exact, stats.mismatch), (2, 1, 1));
+        assert_eq!(stats.mismatch_primary_classes["pending_rule_review"], 1);
+        assert_eq!(report.primary_classes["exact"], 1);
+        assert_eq!(report.primary_classes["pending_rule_review"], 1);
     }
 }
