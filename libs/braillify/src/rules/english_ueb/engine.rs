@@ -205,11 +205,15 @@ impl EnglishUebEngine {
         &self,
         chars: &[char],
         suppress_caps: bool,
+        prepend_grade1_indicator: bool,
         standing_alone: bool,
         word_initial: bool,
         digit_adjacent: bool,
     ) -> Option<Vec<u8>> {
         let mut out = Vec::new();
+        if prepend_grade1_indicator {
+            out.push(GRADE1);
+        }
         let lower: Vec<char> = chars.iter().flat_map(|ch| ch.to_lowercase()).collect();
         let lower_word: String = lower.iter().collect();
         if !standing_alone && super::rule_10_5::wordsign(&lower_word).is_some() {

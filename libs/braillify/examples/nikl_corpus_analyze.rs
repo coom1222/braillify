@@ -2832,12 +2832,28 @@ fn markdown(report: &AnalysisReport) -> String {
          places grade 1 before capitalization. The current standalone ASCII-token \
          route already supplies that guard for complete shortform-shaped controls \
          such as `AC`, `CD`, `IMM`, and `AG`; the attached Korean-word/parenthetical \
-         route enters directly at the capital marker and accounts for the localized \
-         `⠰ -> ⠠` signature. This is a routing distinction supported independently \
-         by the PDF, not an expected-output lookup. Longer runs such as `GDP` and \
-         `LLM` are admitted only when a pure-letter shortform occupies the beginning \
-         of the run; a shortform appearing later would require the distinct grade-1 \
-         word rule 10.9.9 and is outside this implementation candidate.\n\n",
+         route enters directly at the capital marker and accounts for part of the \
+         localized `⠰ -> ⠠` signature. This is a routing distinction supported \
+         independently by the PDF, not an expected-output lookup. The implemented \
+         boundary is only rule 10.9.7's complete pure-letter shortform. Longer runs \
+         such as `GDP`, `LLM`, and the PDF's rule-10.9.8 `LLC` example remain in the \
+         broad diagnostic cohort but are not generalized in Korean routing: that \
+         broader experiment regressed its exact controls. A shortform appearing \
+         later would require the still-distinct grade-1 word rule 10.9.9.\n\n\
+         Implementation-boundary experiment (all numbers are full-corpus exact \
+         matches, with the committed analyzer-only checkpoint as baseline):\n\n\
+         | Boundary | Exact / 83,528 | Change | Decision |\n\
+         |---|---:|---:|---|\n\
+         | Analyzer-only baseline | 66,546 | — | control |\n\
+         | Prefix guard extended through the uppercase token route | 65,264 | -1,282 | rejected |\n\
+         | Same-token token route narrowed, rule-28 prefix retained | 65,355 | -1,191 | rejected |\n\
+         | Uppercase token route restored, rule-28 prefix retained | 65,474 | -1,072 | rejected |\n\
+         | Rule-28 complete shortform only | 66,683 | +137 | retained |\n\n\
+         At the retained boundary the broad cohort moves from 2,239 exact / 1,881 \
+         mismatch / 962 target-localized / 1 reverse to 2,376 exact / 1,744 \
+         mismatch / 778 target-localized / 42 reverse. These figures do not turn \
+         the remaining longer-prefix members into an engine rule; they preserve \
+         the failed broader trials as evidence that input shape alone is unsafe.\n\n",
     );
     text.push_str(
         "Same-surface controls demonstrate why primary classes must not be changed \

@@ -10,6 +10,7 @@
 use crate::char_struct::CharType;
 use crate::rules::RuleMeta;
 use crate::rules::context::RuleContext;
+use crate::rules::english_shortform::requires_grade1_indicator;
 use crate::rules::english_ueb::korean_context::KoreanPrefixInput;
 use crate::rules::english_ueb::span::{encode_korean_unit, encode_korean_word};
 use crate::rules::traits::{BrailleRule, Phase, RuleResult};
@@ -148,9 +149,27 @@ impl BrailleRule for Rule28 {
                     .word_chars
                     .get(run_end)
                     .is_some_and(|ch| ch.is_ascii_digit());
+            // UEB 5.7.2, 5.8.1, and 10.9.7: when an attached Roman entry is a
+            // complete pure-letter shortform, grade 1 precedes its capitalization
+            // marker. Standalone ASCII tokens have already been handled by
+            // `UppercasePassageRule`. Digit and hyphen continuations retain their
+            // independent rule-35/state-machine paths.
+            let follows_hyphen = ctx
+                .index
+                .checked_sub(1)
+                .and_then(|index| ctx.word_chars.get(index))
+                .is_some_and(|ch| *ch == '-');
+            let uppercase_run = run.iter().collect::<String>();
+            let prepend_grade1_indicator = !caps_already_emitted
+                && word_initial
+                && !digit_adjacent
+                && !follows_hyphen
+                && run.iter().all(|ch| ch.is_ascii_uppercase())
+                && requires_grade1_indicator(&uppercase_run);
             if let Some(cells) = encode_korean_word(
                 run,
                 caps_already_emitted,
+                prepend_grade1_indicator,
                 standalone_wordsign,
                 word_initial,
                 digit_adjacent,
@@ -265,6 +284,20 @@ mod tests {
             default_mode: Some(EncodingMode::Korean),
         };
         assert_eq!(encode_with_options(input, &options).unwrap(), expected);
+    }
+
+    /// UEB 5.7.2/5.8.1/10.9.7 complete-shortform handling through the complete
+    /// Korean encoder. Every Roman surface comes directly from the PDF examples
+    /// (`CD`, `ALT`, `NEC`); the Korean wrapper exercises only rule 28/29/34 routing.
+    #[rstest::rstest]
+    #[case::standing_alone_could("가(CD)", "⠫⠦⠄⠴⠰⠠⠠⠉⠙⠠⠴")]
+    #[case::alt_example("가(ALT)", "⠫⠦⠄⠴⠰⠠⠠⠁⠇⠞⠠⠴")]
+    #[case::nec_example("가(NEC)", "⠫⠦⠄⠴⠰⠠⠠⠝⠑⠉⠠⠴")]
+    fn attached_allcaps_complete_shortform_uses_grade1(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
     }
 
     #[test]

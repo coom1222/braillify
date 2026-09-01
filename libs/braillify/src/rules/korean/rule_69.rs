@@ -90,7 +90,7 @@ fn compatibility_unit_decomposition(c: char) -> Option<Vec<char>> {
 /// and a lower groupsign cannot consume the whole entry run (`in` is spelled
 /// `i`-`n`, while the same `in` may contract inside `min`).
 fn encode_rule_69_unit_letters(letters: &[char]) -> Result<Vec<u8>, String> {
-    encode_korean_word(letters, false, false, true, false).ok_or_else(|| {
+    encode_korean_word(letters, false, false, false, true, false).ok_or_else(|| {
         format!(
             "cannot encode rule 69 Roman unit letters: {}",
             letters.iter().collect::<String>()

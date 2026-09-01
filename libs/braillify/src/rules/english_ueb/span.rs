@@ -39,6 +39,7 @@ pub(crate) struct KoreanSpanUnit {
 pub(crate) fn encode_korean_word(
     chars: &[char],
     suppress_caps: bool,
+    prepend_grade1_indicator: bool,
     standing_alone: bool,
     word_initial: bool,
     digit_adjacent: bool,
@@ -46,6 +47,7 @@ pub(crate) fn encode_korean_word(
     KOREAN_WORD_ENGINE.encode_korean_word(
         chars,
         suppress_caps,
+        prepend_grade1_indicator,
         standing_alone,
         word_initial,
         digit_adjacent,
