@@ -1104,9 +1104,60 @@ mod test {
         assert!(err.is_err());
     }
 
-    /// Recursively scan test_cases/ subdirectories, returning (path, key) pairs.
-    /// Key format: "subdir/file_stem" (e.g., "korean/rule_1", "math/math_1").
-    fn collect_test_files() -> Vec<(std::path::PathBuf, String)> {
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase")]
+    struct TestCaseRuleConfig {
+        #[serde(default)]
+        benchmark: bool,
+        #[serde(default)]
+        shards: bool,
+    }
+
+    type TestCaseRuleMap = HashMap<String, TestCaseRuleConfig>;
+
+    fn load_test_case_rule_map() -> TestCaseRuleMap {
+        serde_json::from_str(
+            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rule_map.json"))
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// Resolves a physical JSON file to its logical `rule_map.json` key.
+    ///
+    /// Most fixtures map one-to-one (`korean/rule_1.json` -> `korean/rule_1`).
+    /// A rule-map entry with `shards: true` may instead own numbered files such
+    /// as `corpus/sentence_01.json` and `corpus/sentence_02.json`. Unknown files
+    /// keep their physical key so the rule-map integrity check reports them.
+    fn logical_test_case_key(physical_key: &str, rule_map: &TestCaseRuleMap) -> String {
+        if rule_map.contains_key(physical_key) {
+            return physical_key.to_string();
+        }
+
+        let mut matches = rule_map
+            .iter()
+            .filter(|(_, config)| config.shards)
+            .filter_map(|(key, _)| {
+                physical_key
+                    .strip_prefix(key)
+                    .and_then(|suffix| suffix.strip_prefix('_'))
+                    .filter(|suffix| {
+                        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                    .map(|_| key.clone())
+            })
+            .collect::<Vec<_>>();
+        matches.sort();
+        assert!(
+            matches.len() <= 1,
+            "fixture {physical_key:?} matches multiple sharded rule-map entries: {matches:?}"
+        );
+        matches.pop().unwrap_or_else(|| physical_key.to_string())
+    }
+
+    /// Recursively scans `test_cases/`, returning physical paths paired with
+    /// logical rule-map keys. Multiple shard paths may therefore share one key.
+    fn collect_test_files(rule_map: &TestCaseRuleMap) -> Vec<(std::path::PathBuf, String)> {
         let test_cases_dir =
             std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../test_cases"));
         let mut files = Vec::new();
@@ -1120,14 +1171,37 @@ mod test {
                     let sub_path = sub_entry.path();
                     if sub_path.extension().unwrap_or_default() == "json" {
                         let stem = sub_path.file_stem().unwrap().to_string_lossy().to_string();
-                        let key = format!("{}/{}", subdir, stem);
+                        let physical_key = format!("{}/{}", subdir, stem);
+                        let key = logical_test_case_key(&physical_key, rule_map);
                         files.push((sub_path, key));
                     }
                 }
             }
         }
-        files.sort_by(|a, b| a.1.cmp(&b.1));
+        files.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         files
+    }
+
+    #[rstest::rstest]
+    #[case::exact_rule("korean/rule_1", "korean/rule_1")]
+    #[case::numbered_shard("corpus/sentence_04", "corpus/sentence")]
+    #[case::unregistered_file("corpus/other_01", "corpus/other_01")]
+    fn resolves_physical_fixture_to_logical_rule_key(
+        #[case] physical_key: &str,
+        #[case] expected: &str,
+    ) {
+        let rule_map = HashMap::from([
+            ("korean/rule_1".to_string(), TestCaseRuleConfig::default()),
+            (
+                "corpus/sentence".to_string(),
+                TestCaseRuleConfig {
+                    shards: true,
+                    ..TestCaseRuleConfig::default()
+                },
+            ),
+        ]);
+
+        assert_eq!(logical_test_case_key(physical_key, &rule_map), expected);
     }
 
     fn testcase_answer_forms(
@@ -1191,22 +1265,164 @@ mod test {
         )]
     }
 
+    #[derive(serde::Deserialize)]
+    struct NiklCorpusCase {
+        input: String,
+        unicode: String,
+    }
+
+    fn load_test_case_group<T: serde::de::DeserializeOwned>(key: &str) -> Vec<T> {
+        let rule_map = load_test_case_rule_map();
+        assert!(rule_map.contains_key(key), "unknown test-case group: {key}");
+        let paths = collect_test_files(&rule_map)
+            .into_iter()
+            .filter_map(|(path, logical_key)| (logical_key == key).then_some(path))
+            .collect::<Vec<_>>();
+        assert!(!paths.is_empty(), "test-case group {key} has no JSON files");
+        let mut cases = Vec::new();
+        for path in paths {
+            let mut shard: Vec<T> = serde_json::from_reader(
+                File::open(&path).expect("test-case JSON must be readable"),
+            )
+            .unwrap_or_else(|error| panic!("{} must be valid JSON: {error}", path.display()));
+            cases.append(&mut shard);
+        }
+        cases
+    }
+
+    fn load_nikl_corpus_cases() -> Vec<NiklCorpusCase> {
+        load_test_case_group("corpus/sentence")
+    }
+
+    type TestStatusRow = (
+        String,
+        String,
+        String,
+        String,
+        bool,
+        String,
+        bool,
+        String,
+        bool,
+    );
+
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestStatusPageInfo {
+        page_size: usize,
+        page_count: usize,
+    }
+
+    const TEST_STATUS_PAGE_SIZE: usize = 250;
+
+    #[derive(Default)]
+    struct NiklFailureStats {
+        encoding_errors: usize,
+        contains_latin: usize,
+        contains_digits: usize,
+        contains_delimiters: usize,
+        korean_text_only: usize,
+    }
+
+    fn classify_nikl_failure(input: &str, is_encoding_error: bool, stats: &mut NiklFailureStats) {
+        if is_encoding_error {
+            stats.encoding_errors += 1;
+        }
+
+        let contains_latin = input.chars().any(|ch| ch.is_ascii_alphabetic());
+        let contains_digits = input.chars().any(|ch| ch.is_ascii_digit());
+        let contains_delimiters = input.chars().any(|ch| {
+            matches!(
+                ch,
+                '(' | ')' | '[' | ']' | '{' | '}' | '“' | '”' | '‘' | '’' | '"' | '\''
+            )
+        });
+
+        stats.contains_latin += usize::from(contains_latin);
+        stats.contains_digits += usize::from(contains_digits);
+        stats.contains_delimiters += usize::from(contains_delimiters);
+        stats.korean_text_only +=
+            usize::from(!contains_latin && !contains_digits && !contains_delimiters);
+    }
+
+    /// NIKL Korean–Korean Braille Parallel Corpus (2025 v1.0) regression suite.
+    ///
+    /// The fixture uses the shared logical-group loader and the project's standard
+    /// `input`/`internal`/`expected`/`unicode` shape. This dedicated assertion keeps
+    /// the full benchmark available as an opt-in regression gate while
+    /// `test_by_testcase` records its current accuracy for the landing page.
+    #[test]
+    #[ignore = "NIKL corpus support is tracked as a benchmark until it reaches 100%"]
+    fn test_nikl_parallel_corpus() {
+        let cases = load_nikl_corpus_cases();
+        assert!(!cases.is_empty(), "NIKL corpus fixture must not be empty");
+
+        let mut failures = Vec::new();
+        let mut failure_stats = NiklFailureStats::default();
+        for case in &cases {
+            match encode_to_unicode(&case.input) {
+                Ok(actual) if actual == case.unicode => {}
+                Ok(actual) => {
+                    classify_nikl_failure(&case.input, false, &mut failure_stats);
+                    failures.push((
+                        case.input.as_str(),
+                        case.input.as_str(),
+                        case.unicode.as_str(),
+                        "mismatch",
+                        actual,
+                    ));
+                }
+                Err(error) => {
+                    classify_nikl_failure(&case.input, true, &mut failure_stats);
+                    failures.push((
+                        case.input.as_str(),
+                        case.input.as_str(),
+                        case.unicode.as_str(),
+                        "encoding error",
+                        error,
+                    ));
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            let preview = failures
+                .iter()
+                .take(20)
+                .map(|(id, input, expected, kind, actual)| {
+                    format!(
+                        "{id} ({kind})\n  input: {input}\n  expected: {expected}\n  actual: {actual}"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!(
+                "NIKL corpus: {}/{} cases differ from the reference.\n\
+                 Failure traits (overlapping): encoding errors={}, Latin={}, digits={}, delimiters={}, Korean-text-only={}.\n\
+                 First {}:\n{}",
+                failures.len(),
+                cases.len(),
+                failure_stats.encoding_errors,
+                failure_stats.contains_latin,
+                failure_stats.contains_digits,
+                failure_stats.contains_delimiters,
+                failure_stats.korean_text_only,
+                failures.len().min(20),
+                preview
+            );
+        }
+    }
+
     #[test]
     pub fn test_by_testcase() {
-        let files = collect_test_files();
+        let rule_map = load_test_case_rule_map();
+        let files = collect_test_files(&rule_map);
         let mut total = 0;
         let mut failed = 0;
         let mut failed_cases = Vec::new();
         // (filename, line_num, input, reason) — limitation 필드로 skip된 케이스.
         let mut skipped_cases: Vec<(String, usize, String, String)> = Vec::new();
         let mut file_stats = std::collections::BTreeMap::new();
-
-        // read rule_map.json
-        let rule_map: HashMap<String, HashMap<String, String>> = serde_json::from_str(
-            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rule_map.json"))
-                .unwrap(),
-        )
-        .unwrap();
 
         let rule_map_keys: std::collections::HashSet<String> = rule_map.keys().cloned().collect();
         let file_keys: std::collections::HashSet<_> =
@@ -1221,6 +1437,9 @@ mod test {
         }
 
         for (path, file_stem) in &files {
+            let config = rule_map
+                .get(file_stem)
+                .unwrap_or_else(|| panic!("missing rule-map config for {file_stem}"));
             let content = std::fs::read_to_string(path).unwrap();
             let filename = path.file_name().unwrap().to_string_lossy();
             let records: Vec<serde_json::Value> = serde_json::from_str(&content)
@@ -1232,18 +1451,6 @@ mod test {
             let mut file_world_failed = 0;
             let mut file_jeomsarang_total = 0;
             let mut file_jeomsarang_failed = 0;
-            // (input, note, expected, actual, is_success, world, world_is_success, jeomsarang, jeomsarang_is_success)
-            type TestStatusRow = (
-                String,
-                String,
-                String,
-                String,
-                bool,
-                String,
-                bool,
-                String,
-                bool,
-            );
             let mut test_status: Vec<TestStatusRow> = Vec::new();
 
             for (line_num, record) in records.iter().enumerate() {
@@ -1277,7 +1484,9 @@ mod test {
                     ));
                     continue;
                 }
-                total += 1;
+                if !config.benchmark {
+                    total += 1;
+                }
                 file_total += 1;
                 let input = record["input"].as_str().unwrap_or_else(|| {
                     panic!(
@@ -1287,10 +1496,21 @@ mod test {
                 });
                 let context = record["context"].as_str().unwrap_or("");
                 let note = record["note"].as_str().unwrap_or("").to_string();
-                let world = record["world"].as_str().unwrap_or("").to_string();
-                file_world_total += 1;
-                let jeomsarang = record["jeomsarang"].as_str().unwrap_or("").to_string();
-                file_jeomsarang_total += 1;
+                // Benchmark fixtures are evaluated only against their own Unicode
+                // reference. Competitor fields remain untouched in the source JSON
+                // and are intentionally excluded from pass/fail metrics.
+                let (world, jeomsarang) = if config.benchmark {
+                    (String::new(), String::new())
+                } else {
+                    (
+                        record["world"].as_str().unwrap_or("").to_string(),
+                        record["jeomsarang"].as_str().unwrap_or("").to_string(),
+                    )
+                };
+                if !config.benchmark {
+                    file_world_total += 1;
+                    file_jeomsarang_total += 1;
+                }
                 // 테스트 케이스 파일의 숫자 코드에서 앞뒤 공백 제거 후 비교
                 let answer_forms = testcase_answer_forms(record, &filename, line_num);
                 let expected_forms = answer_forms
@@ -1351,25 +1571,27 @@ mod test {
                         let case_matches = expected_forms.contains(&actual_str);
 
                         if !case_matches {
-                            failed += 1;
                             file_failed += 1;
-                            failed_cases.push((
-                                filename.to_string(),
-                                line_num + 1,
-                                input.to_string(),
-                                expected_display.clone(),
-                                actual_str.clone(),
-                                braille_expected.clone(),
-                                unicode_display.clone(),
-                            ));
+                            if !config.benchmark {
+                                failed += 1;
+                                failed_cases.push((
+                                    filename.to_string(),
+                                    line_num + 1,
+                                    input.to_string(),
+                                    expected_display.clone(),
+                                    actual_str.clone(),
+                                    braille_expected.clone(),
+                                    unicode_display.clone(),
+                                ));
+                            }
                         }
                         let world_is_success = !world.is_empty() && unicode_forms.contains(&world);
-                        if !world_is_success {
+                        if !config.benchmark && !world_is_success {
                             file_world_failed += 1;
                         }
                         let jeomsarang_is_success =
                             !jeomsarang.is_empty() && unicode_forms.contains(&jeomsarang);
-                        if !jeomsarang_is_success {
+                        if !config.benchmark && !jeomsarang_is_success {
                             file_jeomsarang_failed += 1;
                         }
 
@@ -1386,26 +1608,30 @@ mod test {
                         ));
                     }
                     Err(e) => {
-                        println!("Error: {}", e);
-                        failed += 1;
+                        if !config.benchmark {
+                            println!("Error: {}", e);
+                        }
                         file_failed += 1;
-                        failed_cases.push((
-                            filename.to_string(),
-                            line_num + 1,
-                            input.to_string(),
-                            expected_display.clone(),
-                            "".to_string(),
-                            e.to_string(),
-                            unicode_display.clone(),
-                        ));
+                        if !config.benchmark {
+                            failed += 1;
+                            failed_cases.push((
+                                filename.to_string(),
+                                line_num + 1,
+                                input.to_string(),
+                                expected_display.clone(),
+                                "".to_string(),
+                                e.to_string(),
+                                unicode_display.clone(),
+                            ));
+                        }
 
                         let world_is_success = !world.is_empty() && unicode_forms.contains(&world);
-                        if !world_is_success {
+                        if !config.benchmark && !world_is_success {
                             file_world_failed += 1;
                         }
                         let jeomsarang_is_success =
                             !jeomsarang.is_empty() && unicode_forms.contains(&jeomsarang);
-                        if !jeomsarang_is_success {
+                        if !config.benchmark && !jeomsarang_is_success {
                             file_jeomsarang_failed += 1;
                         }
 
@@ -1423,18 +1649,16 @@ mod test {
                     }
                 }
             }
-            file_stats.insert(
-                file_stem.clone(),
-                (
-                    file_total,
-                    file_failed,
-                    file_world_total,
-                    file_world_failed,
-                    file_jeomsarang_total,
-                    file_jeomsarang_failed,
-                    test_status,
-                ),
-            );
+            let stats = file_stats
+                .entry(file_stem.clone())
+                .or_insert_with(|| (0, 0, 0, 0, 0, 0, Vec::<TestStatusRow>::new()));
+            stats.0 += file_total;
+            stats.1 += file_failed;
+            stats.2 += file_world_total;
+            stats.3 += file_world_failed;
+            stats.4 += file_jeomsarang_total;
+            stats.5 += file_jeomsarang_failed;
+            stats.6.append(&mut test_status);
         }
 
         if !failed_cases.is_empty() {
@@ -1502,6 +1726,52 @@ mod test {
             }
             println!("총 Skip: {}건", skipped_cases.len());
         }
+
+        // Large, sharded fixture groups are emitted as browser-loadable pages.
+        // Their aggregate counts stay in `test_status.json`, while the row list
+        // is loaded only after the matching landing-page tab is opened. This
+        // keeps every row available without embedding the entire corpus in the
+        // statically rendered page payload.
+        let paged_status_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/landing/public/test-status");
+        let mut paged_status_manifest = std::collections::BTreeMap::new();
+        for (key, config) in &rule_map {
+            if !config.shards {
+                continue;
+            }
+
+            let stats = file_stats
+                .get_mut(key)
+                .unwrap_or_else(|| panic!("missing test status for sharded group {key}"));
+            let rows = std::mem::take(&mut stats.6);
+            let page_count = rows.len().div_ceil(TEST_STATUS_PAGE_SIZE);
+            let output_dir = paged_status_root.join(key);
+            std::fs::create_dir_all(&output_dir).unwrap_or_else(|error| {
+                panic!(
+                    "failed to create paged test-status directory {}: {error}",
+                    output_dir.display()
+                )
+            });
+
+            for (page_index, page) in rows.chunks(TEST_STATUS_PAGE_SIZE).enumerate() {
+                let page_path = output_dir.join(format!("page-{}.json", page_index + 1));
+                serde_json::to_writer(File::create(&page_path).unwrap(), page).unwrap();
+            }
+
+            paged_status_manifest.insert(
+                key.clone(),
+                TestStatusPageInfo {
+                    page_size: TEST_STATUS_PAGE_SIZE,
+                    page_count,
+                },
+            );
+        }
+        std::fs::create_dir_all(&paged_status_root).unwrap();
+        serde_json::to_writer_pretty(
+            File::create(paged_status_root.join("manifest.json")).unwrap(),
+            &paged_status_manifest,
+        )
+        .unwrap();
 
         // Write per-file stats to the workspace-root status file.
         let status_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test_status.json");
@@ -1601,7 +1871,11 @@ mod test {
     /// Non-panicking accuracy report — run with `cargo test test_accuracy_report -- --nocapture`
     #[test]
     fn test_accuracy_report() {
-        let files = collect_test_files();
+        let rule_map = load_test_case_rule_map();
+        let files = collect_test_files(&rule_map)
+            .into_iter()
+            .filter(|(_, key)| !rule_map[key].benchmark)
+            .collect::<Vec<_>>();
 
         let mut total = 0usize;
         let mut passed = 0usize;
