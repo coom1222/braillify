@@ -316,7 +316,7 @@ fn validate_corpus_shape(shard_count: usize, case_count: usize) -> Result<(), St
 
 fn singleton_unsupported_set_with(
     cases: &[LocatedCase],
-    mut fails_alone: impl FnMut(char) -> bool,
+    fails_alone: &mut dyn FnMut(char) -> bool,
 ) -> BTreeSet<char> {
     cases
         .iter()
@@ -328,7 +328,7 @@ fn singleton_unsupported_set_with(
 }
 
 fn singleton_unsupported_set(cases: &[LocatedCase]) -> BTreeSet<char> {
-    singleton_unsupported_set_with(cases, |ch| {
+    singleton_unsupported_set_with(cases, &mut |ch| {
         braillify::encode_to_unicode(&ch.to_string()).is_err()
     })
 }
@@ -7099,7 +7099,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut calls = BTreeMap::<char, usize>::new();
 
-        let unsupported = singleton_unsupported_set_with(&cases, |ch| {
+        let unsupported = singleton_unsupported_set_with(&cases, &mut |ch| {
             *calls.entry(ch).or_insert(0) += 1;
             matches!(ch, '㈜' | 'ℓ')
         });
@@ -7107,6 +7107,15 @@ mod tests {
         assert_eq!(unsupported, BTreeSet::from(['ℓ', '㈜']));
         assert_eq!(calls.len(), 4);
         assert!(calls.values().all(|count| *count == 1));
+    }
+
+    #[test]
+    fn serializes_report_enum_keys_as_snake_case_strings() {
+        assert_eq!(enum_key(&PrimaryClass::Exact), "exact");
+        assert_eq!(
+            enum_key(&Reason::UnsupportedCharacterReview),
+            "unsupported_character_review"
+        );
     }
 
     #[rstest::rstest]

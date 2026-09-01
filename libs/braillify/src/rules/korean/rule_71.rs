@@ -216,6 +216,21 @@ mod tests {
         assert!(ctx.state.is_english);
     }
 
+    #[test]
+    fn attached_ampersand_resumes_indicator_free_english_dominant_context() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("&c", true);
+        owned.state.english_dominant_no_indicator = true;
+        let mut ctx = owned.ctx_at(0);
+
+        let outcome = Rule71.apply(&mut ctx).unwrap();
+
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert_eq!(ctx.result.as_slice(), encode_unicode_cells("⠈⠯"));
+        assert!(ctx.state.is_english);
+        assert!(!ctx.state.needs_english_continuation);
+        assert!(!ctx.state.roman_number_chain);
+    }
+
     /// Full-encoder controls reproduce the two UEB 3.1.1 examples exactly.
     #[rstest::rstest]
     #[case::official_at_and_t("AT&T", "⠠⠠⠁⠞⠈⠯⠠⠞")]

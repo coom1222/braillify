@@ -854,6 +854,19 @@ impl EnglishUebEngine {
 mod test_support {
     use super::*;
 
+    /// UEB 10.5.1's official `BE ALL THAT YOU CAN BE` supplies the all-capital
+    /// `CAN` surface. In Korean rule-37 mode the wordsign is spelled, while its
+    /// capitals-word extent must still be preserved by the shared UEB engine.
+    #[test]
+    fn korean_non_standalone_all_caps_wordsign_uses_capitals_word_indicator() {
+        let chars = "CAN".chars().collect::<Vec<_>>();
+        let encoded = EnglishUebEngine::new()
+            .encode_korean_word(&chars, false, false, false, true, false)
+            .expect("ASCII Roman word must encode");
+
+        assert!(encoded.starts_with(&[CAPITAL, CAPITAL]));
+    }
+
     pub(super) fn enc(text: &str) -> Option<Vec<u8>> {
         super::super::try_encode(text)
     }

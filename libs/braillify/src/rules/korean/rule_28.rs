@@ -424,6 +424,22 @@ mod tests {
         let _ = outcome;
     }
 
+    /// A rule invocation that resumes inside an ASCII run must restart a
+    /// capitals indicator and stop its extent at the following lowercase
+    /// letter. Normal full-word routing skips over this position in one pass;
+    /// this direct check preserves the defensive continuation behavior.
+    #[test]
+    fn uppercase_continuation_stops_before_following_lowercase_letter() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("aBc", false);
+        owned.state.is_english = true;
+        let mut ctx = owned.ctx_at(1);
+
+        let outcome = Rule28.apply(&mut ctx).unwrap();
+
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert_eq!(owned.result.first(), Some(&UPPERCASE_SINGLE));
+    }
+
     /// rule_28 line 64 — `let-else return Skip` for non-English ctx.
     #[test]
     fn rule28_apply_skip_for_non_english_ctx() {

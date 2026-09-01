@@ -642,6 +642,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn compatibility_unit_encoder_rejects_components_outside_its_grammar() {
+        let error = encode_compatibility_unit(&['?'], true, true).unwrap_err();
+
+        assert_eq!(error, "unsupported compatibility unit component: U+003F");
+    }
+
     /// The compatibility-unit grammar sends only ASCII-letter runs here.
     /// Rejecting a numeric component directly keeps that defensive contract
     /// observable without weakening the accepted Rule 68/69 glyph set.
