@@ -14,8 +14,6 @@ import {
 } from '@/components/side-bar'
 import { FailedOnlyInput } from '@/components/test-case/FailedOnlyInput'
 import { TestCaseFilter } from '@/components/test-case/filter/TestCaseFilter'
-import { TestCaseList } from '@/components/test-case/list/TestCaseList'
-import { TestCaseTable } from '@/components/test-case/table/TestCaseTable'
 import { TestCaseDisplayBoundary } from '@/components/test-case/TestCaseDisplayBoundary'
 import { TestCaseFilterContainer } from '@/components/test-case/TestCaseFilterContainer'
 import { TestCaseFilterValue } from '@/components/test-case/TestCaseFilterValue'
@@ -24,6 +22,7 @@ import {
   type TestCaseFilter as TestCaseFilterType,
   TestCaseProvider,
 } from '@/components/test-case/TestCaseProvider'
+import { TestCaseResults } from '@/components/test-case/TestCaseResults'
 import { TestCaseRuleContainer } from '@/components/test-case/TestCaseRuleContainer'
 import { TestCaseStat } from '@/components/test-case/TestCaseStat'
 import { TestCaseStatFiltered } from '@/components/test-case/TestCaseStatFiltered'
@@ -35,7 +34,7 @@ import {
   TEST_CASE_FILTERS,
   TEST_CASE_FILTERS_MAP,
 } from '@/constants'
-import type { TestStatusMap } from '@/types'
+import type { TestStatusMap, TestStatusPageManifest } from '@/types'
 
 export const metadata: Metadata = {
   title: '테스트 케이스 - 한국·영어 점자 표준 검증',
@@ -84,13 +83,16 @@ export const metadata: Metadata = {
 }
 
 export default async function TestCasePage() {
-  const [testStatus, ruleMap] = await Promise.all([
+  const [testStatus, ruleMap, testStatusPageManifest] = await Promise.all([
     readFile('../../test_status.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<TestStatusMap>,
     readFile('../../rule_map.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<Record<string, { title: string; description: string }>>,
+    readFile('public/test-status/manifest.json', 'utf-8').then((data) =>
+      JSON.parse(data),
+    ) as Promise<TestStatusPageManifest>,
   ])
 
   // Dynamically create filter map based on rule_map keys
@@ -172,12 +174,12 @@ export default async function TestCasePage() {
                 {value.description}
               </Text>
             </VStack>
-            <TestCaseDisplayBoundary option="type" value="table">
-              <TestCaseTable results={testStatus[key][6]} />
-            </TestCaseDisplayBoundary>
-            <TestCaseDisplayBoundary option="type" value="list">
-              <TestCaseList results={testStatus[key][6]} />
-            </TestCaseDisplayBoundary>
+            <TestCaseResults
+              pageInfo={testStatusPageManifest[key]}
+              results={testStatus[key][6]}
+              statusKey={key}
+              total={testStatus[key][0]}
+            />
           </TestCaseRuleContainer>
           {currentClause !== nextClause && (
             <Box bg="$text" h="1px" mx={['16px', null, null, '60px']} />

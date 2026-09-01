@@ -23,3 +23,10 @@ export type TestStatus = [
 ]
 
 export type TestStatusMap = Record<string, TestStatus>
+
+export interface TestStatusPageInfo {
+  pageSize: number
+  pageCount: number
+}
+
+export type TestStatusPageManifest = Record<string, TestStatusPageInfo>

@@ -1111,9 +1111,6 @@ mod test {
         benchmark: bool,
         #[serde(default)]
         shards: bool,
-        sample_limit: Option<usize>,
-        #[serde(default)]
-        normalize_competitor_spaces: bool,
     }
 
     type TestCaseRuleMap = HashMap<String, TestCaseRuleConfig>;
@@ -1309,6 +1306,15 @@ mod test {
         bool,
     );
 
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestStatusPageInfo {
+        page_size: usize,
+        page_count: usize,
+    }
+
+    const TEST_STATUS_PAGE_SIZE: usize = 250;
+
     #[derive(Default)]
     struct NiklFailureStats {
         encoding_errors: usize,
@@ -1434,15 +1440,6 @@ mod test {
             let config = rule_map
                 .get(file_stem)
                 .unwrap_or_else(|| panic!("missing rule-map config for {file_stem}"));
-            let existing_status_len = file_stats
-                .get(file_stem)
-                .map(
-                    |stats: &(usize, usize, usize, usize, usize, usize, Vec<TestStatusRow>)| {
-                        stats.6.len()
-                    },
-                )
-                .unwrap_or(0);
-            let sample_limit = config.sample_limit.unwrap_or(usize::MAX);
             let content = std::fs::read_to_string(path).unwrap();
             let filename = path.file_name().unwrap().to_string_lossy();
             let records: Vec<serde_json::Value> = serde_json::from_str(&content)
@@ -1499,19 +1496,19 @@ mod test {
                 });
                 let context = record["context"].as_str().unwrap_or("");
                 let note = record["note"].as_str().unwrap_or("").to_string();
-                let normalize_competitor = |value: &str| {
-                    if config.normalize_competitor_spaces {
-                        value.replace(' ', &encode_unicode(0).to_string())
-                    } else {
-                        value.to_string()
-                    }
+                // Benchmark fixtures are evaluated only against their own Unicode
+                // reference. Competitor fields remain untouched in the source JSON
+                // and are intentionally excluded from pass/fail metrics.
+                let (world, jeomsarang) = if config.benchmark {
+                    (String::new(), String::new())
+                } else {
+                    (
+                        record["world"].as_str().unwrap_or("").to_string(),
+                        record["jeomsarang"].as_str().unwrap_or("").to_string(),
+                    )
                 };
-                let world = normalize_competitor(record["world"].as_str().unwrap_or(""));
-                let jeomsarang = normalize_competitor(record["jeomsarang"].as_str().unwrap_or(""));
-                if !config.benchmark || !world.is_empty() {
+                if !config.benchmark {
                     file_world_total += 1;
-                }
-                if !config.benchmark || !jeomsarang.is_empty() {
                     file_jeomsarang_total += 1;
                 }
                 // 테스트 케이스 파일의 숫자 코드에서 앞뒤 공백 제거 후 비교
@@ -1589,28 +1586,26 @@ mod test {
                             }
                         }
                         let world_is_success = !world.is_empty() && unicode_forms.contains(&world);
-                        if !world_is_success && (!config.benchmark || !world.is_empty()) {
+                        if !config.benchmark && !world_is_success {
                             file_world_failed += 1;
                         }
                         let jeomsarang_is_success =
                             !jeomsarang.is_empty() && unicode_forms.contains(&jeomsarang);
-                        if !jeomsarang_is_success && (!config.benchmark || !jeomsarang.is_empty()) {
+                        if !config.benchmark && !jeomsarang_is_success {
                             file_jeomsarang_failed += 1;
                         }
 
-                        if existing_status_len + test_status.len() < sample_limit {
-                            test_status.push((
-                                input.to_string(),
-                                note.clone(),
-                                unicode_display.clone(),
-                                braille_expected.clone(),
-                                case_matches,
-                                world.clone(),
-                                world_is_success,
-                                jeomsarang.clone(),
-                                jeomsarang_is_success,
-                            ));
-                        }
+                        test_status.push((
+                            input.to_string(),
+                            note.clone(),
+                            unicode_display.clone(),
+                            braille_expected.clone(),
+                            case_matches,
+                            world.clone(),
+                            world_is_success,
+                            jeomsarang.clone(),
+                            jeomsarang_is_success,
+                        ));
                     }
                     Err(e) => {
                         if !config.benchmark {
@@ -1631,28 +1626,26 @@ mod test {
                         }
 
                         let world_is_success = !world.is_empty() && unicode_forms.contains(&world);
-                        if !world_is_success && (!config.benchmark || !world.is_empty()) {
+                        if !config.benchmark && !world_is_success {
                             file_world_failed += 1;
                         }
                         let jeomsarang_is_success =
                             !jeomsarang.is_empty() && unicode_forms.contains(&jeomsarang);
-                        if !jeomsarang_is_success && (!config.benchmark || !jeomsarang.is_empty()) {
+                        if !config.benchmark && !jeomsarang_is_success {
                             file_jeomsarang_failed += 1;
                         }
 
-                        if existing_status_len + test_status.len() < sample_limit {
-                            test_status.push((
-                                input.to_string(),
-                                note.clone(),
-                                unicode_display.clone(),
-                                e.to_string(),
-                                false,
-                                world.clone(),
-                                world_is_success,
-                                jeomsarang.clone(),
-                                jeomsarang_is_success,
-                            ));
-                        }
+                        test_status.push((
+                            input.to_string(),
+                            note.clone(),
+                            unicode_display.clone(),
+                            e.to_string(),
+                            false,
+                            world.clone(),
+                            world_is_success,
+                            jeomsarang.clone(),
+                            jeomsarang_is_success,
+                        ));
                     }
                 }
             }
@@ -1733,6 +1726,52 @@ mod test {
             }
             println!("총 Skip: {}건", skipped_cases.len());
         }
+
+        // Large, sharded fixture groups are emitted as browser-loadable pages.
+        // Their aggregate counts stay in `test_status.json`, while the row list
+        // is loaded only after the matching landing-page tab is opened. This
+        // keeps every row available without embedding the entire corpus in the
+        // statically rendered page payload.
+        let paged_status_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/landing/public/test-status");
+        let mut paged_status_manifest = std::collections::BTreeMap::new();
+        for (key, config) in &rule_map {
+            if !config.shards {
+                continue;
+            }
+
+            let stats = file_stats
+                .get_mut(key)
+                .unwrap_or_else(|| panic!("missing test status for sharded group {key}"));
+            let rows = std::mem::take(&mut stats.6);
+            let page_count = rows.len().div_ceil(TEST_STATUS_PAGE_SIZE);
+            let output_dir = paged_status_root.join(key);
+            std::fs::create_dir_all(&output_dir).unwrap_or_else(|error| {
+                panic!(
+                    "failed to create paged test-status directory {}: {error}",
+                    output_dir.display()
+                )
+            });
+
+            for (page_index, page) in rows.chunks(TEST_STATUS_PAGE_SIZE).enumerate() {
+                let page_path = output_dir.join(format!("page-{}.json", page_index + 1));
+                serde_json::to_writer(File::create(&page_path).unwrap(), page).unwrap();
+            }
+
+            paged_status_manifest.insert(
+                key.clone(),
+                TestStatusPageInfo {
+                    page_size: TEST_STATUS_PAGE_SIZE,
+                    page_count,
+                },
+            );
+        }
+        std::fs::create_dir_all(&paged_status_root).unwrap();
+        serde_json::to_writer_pretty(
+            File::create(paged_status_root.join("manifest.json")).unwrap(),
+            &paged_status_manifest,
+        )
+        .unwrap();
 
         // Write per-file stats to the workspace-root status file.
         let status_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test_status.json");
