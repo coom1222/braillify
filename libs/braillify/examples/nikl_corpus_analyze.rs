@@ -596,6 +596,8 @@ const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
 const AMPERSAND_BEFORE_ATTACHED_ASCII_ROMAN_SEGMENT: &str =
     "ampersand_before_attached_ascii_roman_segment";
 const SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS: &str = "spaced_comma_between_ascii_digit_runs";
+const ASCII_ROMAN_COMMA_BEFORE_DIGIT_KOREAN_TOKEN: &str =
+    "ascii_roman_tail_comma_before_digit_korean_token";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
@@ -1180,6 +1182,52 @@ fn spaced_comma_between_ascii_digit_run_spans(input: &str) -> Vec<InputSpan> {
             Some(InputSpan {
                 start_byte: comma_byte,
                 end_byte: after_comma + digit_offset + digit.len_utf8(),
+            })
+        })
+        .collect()
+}
+
+/// Finds a whitespace-delimited ASCII/Roman tail ending in a comma, followed
+/// by a token that begins with a digit and contains Korean script. This is the
+/// rule-33 boundary represented by corpus surfaces such as an English title or
+/// an ASCII unit before a year/count carrying a Korean suffix. Pure English
+/// prose and a following digit-only token are excluded.
+fn ascii_roman_comma_before_digit_korean_token_spans(input: &str) -> Vec<InputSpan> {
+    input
+        .match_indices(',')
+        .filter_map(|(comma_byte, comma)| {
+            if !input[..comma_byte]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+            {
+                return None;
+            }
+
+            let after_comma = comma_byte + comma.len();
+            let first_nonspace = input[after_comma..]
+                .char_indices()
+                .find(|(_, ch)| !ch.is_whitespace())?;
+            if first_nonspace.0 == 0 || !first_nonspace.1.is_ascii_digit() {
+                return None;
+            }
+            let right_start = after_comma + first_nonspace.0;
+            let right_end = input[right_start..]
+                .char_indices()
+                .find_map(|(offset, ch)| ch.is_whitespace().then_some(right_start + offset))
+                .unwrap_or(input.len());
+            if !input[right_start..right_end].chars().any(is_korean_script) {
+                return None;
+            }
+
+            let left_start = input[..comma_byte]
+                .char_indices()
+                .rev()
+                .find_map(|(byte, ch)| ch.is_whitespace().then_some(byte + ch.len_utf8()))
+                .unwrap_or(0);
+            Some(InputSpan {
+                start_byte: left_start,
+                end_byte: right_end,
             })
         })
         .collect()
@@ -2107,6 +2155,33 @@ fn first_difference_at_spaced_numeric_list_comma(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn first_difference_at_ascii_roman_comma_before_digit_korean(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    if !matches!(
+        (
+            item.located.case.unicode.chars().nth(first_difference),
+            actual.chars().nth(first_difference)
+        ),
+        (Some('⠐'), Some('⠂')) | (Some('⠂'), Some('⠐'))
+    ) {
+        return false;
+    }
+    current_engine_signature_ranges(
+        &item.located.case.input,
+        actual,
+        &ascii_roman_comma_before_digit_korean_token_spans(&item.located.case.input),
+        0,
+    )
+    .into_iter()
+    .any(|range| range.contains(&first_difference))
+}
+
 /// Finds a standalone single capital immediately followed by a non-empty,
 /// closed ASCII-digit parenthetical, such as `A(14)`. The span is deliberately
 /// semantic-neutral: prose labels and mathematical function notation can share
@@ -2461,6 +2536,7 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
     first_difference_claimed_before_consecutive_ascii_roman_boundary(item)
         || first_difference_at_consecutive_ascii_roman_word_boundary(item)
         || first_difference_at_spaced_numeric_list_comma(item)
+        || first_difference_at_ascii_roman_comma_before_digit_korean(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3341,6 +3417,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ASCII_ROMAN_COMMA_BEFORE_DIGIT_KOREAN_TOKEN.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3585,6 +3665,15 @@ fn analyze(
                 SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS,
                 !spaced_comma_between_ascii_digit_run_spans(&item.located.case.input).is_empty(),
                 Some(first_difference_at_spaced_numeric_list_comma(item)),
+                true,
+            ),
+            (
+                ASCII_ROMAN_COMMA_BEFORE_DIGIT_KOREAN_TOKEN,
+                !ascii_roman_comma_before_digit_korean_token_spans(&item.located.case.input)
+                    .is_empty(),
+                Some(first_difference_at_ascii_roman_comma_before_digit_korean(
+                    item,
+                )),
                 true,
             ),
             (
@@ -5420,6 +5509,57 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(ASCII_ROMAN_COMMA_BEFORE_DIGIT_KOREAN_TOKEN)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_count = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let korean_to_ueb = "U+2810 ⠐ -> U+2802 ⠂";
+        let ueb_to_korean = "U+2802 ⠂ -> U+2810 ⠐";
+        text.push_str(&format!(
+            "\n### ASCII/Roman-tail comma before a digit-led Korean token\n\n\
+             This companion cohort is disjoint from the preceding digit-comma gate: the comma \
+             is immediately preceded by an ASCII letter, followed after whitespace by a token \
+             that starts with a digit and contains Korean script. Korean rule 33 (2024 \
+             Korean-rules PDF p.28, printed p.22) says that punctuation with different UEB and \
+             Korean cells, including comma, is written as Korean punctuation at a \
+             Roman-to-Korean boundary and suppresses the Roman terminator. Rule 49 supplies \
+             `⠐`; UEB 7 supplies `⠂` only while the comma remains inside English text. Requiring \
+             Korean script in the right token is therefore the negative control against \
+             reclassifying an English date or number sequence from surface punctuation alone.\n\n\
+             Before the shared rule-41 boundary correction, this cohort has {} candidates / {} \
+             exact / {} mismatch. Existing mismatch primaries remain {} \
+             `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, and {} \
+             `unsupported_character_review`. Of {} evaluable mismatches, {} have the comma-cell \
+             transition inside the independently encoded complete boundary signature: {} \
+             `{korean_to_ueb}` and {} `{ueb_to_korean}`. The detector and localizer do not read \
+             expected output to choose a route, and membership does not change a primary class.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_count(korean_to_ueb),
+            localized_count(ueb_to_korean),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(UPPERCASE_ROMAN_HYPHEN_DIGITS)
     {
         let pending = stats
@@ -6861,12 +7001,13 @@ mod tests {
     }
 
     #[test]
-    fn localizes_each_spaced_numeric_list_comma_in_current_output() {
-        let input = "순위는 17, 16, 15이다.";
+    fn localizes_pdf_spaced_numeric_list_comma_in_baseline_output() {
+        // 2024 Korean-rules PDF physical p.209.
+        let input = "제5열 버튼(3, 7 혹은 S)";
         let actual = braillify::encode_to_unicode(input).expect("numeric-list probe must encode");
         let ranges = spaced_numeric_list_comma_actual_ranges(input, &actual);
 
-        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges.len(), 1);
         assert!(
             ranges
                 .iter()
