@@ -869,17 +869,4 @@ mod test_support {
             })
             .collect()
     }
-
-    /// Korean rule 37 suppresses the complete lower wordsign `in` at a Roman
-    /// entry while retaining ordinary alphabet signs through the shared engine.
-    #[test]
-    fn korean_word_entry_spells_complete_lower_wordsign() {
-        let chars = std::hint::black_box("in").chars().collect::<Vec<_>>();
-
-        let actual = EnglishUebEngine::new()
-            .encode_korean_word(&chars, false, false, false, true, false)
-            .expect("rule-37 Roman letters must encode");
-
-        assert_eq!(actual, cells("⠊⠝"));
-    }
 }

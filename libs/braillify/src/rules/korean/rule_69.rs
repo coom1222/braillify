@@ -90,12 +90,13 @@ fn compatibility_unit_decomposition(c: char) -> Option<Vec<char>> {
 /// and a lower groupsign cannot consume the whole entry run (`in` is spelled
 /// `i`-`n`, while the same `in` may contract inside `min`).
 fn encode_rule_69_unit_letters(letters: &[char]) -> Result<Vec<u8>, String> {
-    encode_korean_word(letters, false, false, false, true, false).ok_or_else(|| {
-        format!(
+    match encode_korean_word(letters, false, false, false, true, false) {
+        Some(encoded) => Ok(encoded),
+        None => Err(format!(
             "cannot encode rule 69 Roman unit letters: {}",
             letters.iter().collect::<String>()
-        )
-    })
+        )),
+    }
 }
 
 fn encode_compatibility_unit(
@@ -644,10 +645,24 @@ mod tests {
     /// The compatibility-unit grammar sends only ASCII-letter runs here.
     /// Rejecting a numeric component directly keeps that defensive contract
     /// observable without weakening the accepted Rule 68/69 glyph set.
-    #[test]
-    fn unit_letter_encoder_rejects_non_letter_component() {
-        let error = encode_rule_69_unit_letters(&[std::hint::black_box('1')]).unwrap_err();
-        assert!(error.contains("cannot encode rule 69 Roman unit letters: 1"));
+    #[rstest::rstest]
+    #[case::single_letter("m", true)]
+    #[case::multi_letter_unit("min", true)]
+    #[case::non_letter_component("1", false)]
+    fn unit_letter_encoder_accepts_only_roman_letter_runs(
+        #[case] input: &str,
+        #[case] expected_ok: bool,
+    ) {
+        let letters = input.chars().collect::<Vec<_>>();
+        let result = encode_rule_69_unit_letters(&letters);
+
+        assert_eq!(result.is_ok(), expected_ok);
+        if !expected_ok {
+            assert_eq!(
+                result.unwrap_err(),
+                "cannot encode rule 69 Roman unit letters: 1"
+            );
+        }
     }
 
     #[test]

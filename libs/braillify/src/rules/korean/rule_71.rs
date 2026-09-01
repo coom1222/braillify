@@ -167,27 +167,21 @@ mod tests {
         let _ = Rule71.matches(&ctx);
     }
 
-    /// 제71항 — § 정보 기호가 직후 숫자를 만나면 종료표(⠲) 생략 (line 84-86).
-    #[test]
-    fn rule71_section_sign_before_digit_omits_terminator() {
-        // 제71항 붙임 PDF example `헌법§1①`: Korean context activates the
-        // information-symbol wrapper, while the following digit omits ⠲.
-        let mut owned = crate::test_helpers::CtxOwned::for_text("헌법§1①", false);
-        let mut ctx = owned.ctx_at(2);
+    /// 제71항 붙임 `헌법§1①` covers the digit continuation that omits ⠲;
+    /// the end/non-digit controls cover the ordinary wrapped terminator branch.
+    #[rstest::rstest]
+    #[case::official_digit_continuation("헌법§1①", "⠴⠘⠎")]
+    #[case::word_end("헌법§", "⠴⠘⠎⠲")]
+    #[case::non_digit_continuation("헌법§A", "⠴⠘⠎⠲")]
+    fn section_sign_wrapper_terminator_boundary(#[case] input: &str, #[case] expected: &str) {
+        let section_index = input.chars().position(|ch| ch == '§').unwrap();
+        let mut owned = crate::test_helpers::CtxOwned::for_text(input, false);
+        let mut ctx = owned.ctx_at(section_index);
+
         let outcome = Rule71.apply(&mut ctx).unwrap();
 
         assert!(matches!(outcome, RuleResult::Consumed));
-        assert_eq!(ctx.result.as_slice(), encode_unicode_cells("⠴⠘⠎"));
-    }
-
-    /// rule_71:85 — § followed by NON-digit (or end of input) appends ⠲ terminator.
-    #[test]
-    fn rule71_section_symbol_followed_by_non_digit_appends_terminator() {
-        // Encode "§A" — next char is letter, not digit → ⠲ appended at line 85.
-        let result = crate::encode("§A");
-        assert!(result.is_ok());
-        // Also: § alone (no next char) → no digit → ⠲ appended.
-        let _ = crate::encode("§");
+        assert_eq!(ctx.result.as_slice(), encode_unicode_cells(expected));
     }
 
     /// The Korean Rule 71 encoder owns the ampersand cells even while the

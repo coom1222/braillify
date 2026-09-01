@@ -15,6 +15,10 @@ use crate::rules::english_ueb::korean_context::KoreanPrefixInput;
 use crate::rules::english_ueb::span::{encode_korean_unit, encode_korean_word};
 use crate::rules::traits::{BrailleRule, Phase, RuleResult};
 
+fn is_nonempty_ascii_word(word: &str) -> bool {
+    !word.is_empty() && word.chars().all(|ch| ch.is_ascii_alphabetic())
+}
+
 pub static META: RuleMeta = RuleMeta {
     section: "28",
     subsection: None,
@@ -126,11 +130,11 @@ impl BrailleRule for Rule28 {
             let is_whole_lowercase_word = ctx.index == 0
                 && run_end == ctx.word_chars.len()
                 && run.iter().all(|ch| ch.is_ascii_lowercase());
-            let prev_is_ascii_word = !ctx.prev_word.is_empty()
-                && ctx.prev_word.chars().all(|ch| ch.is_ascii_alphabetic());
-            let next_is_ascii_word = ctx.remaining_words.first().is_some_and(|word| {
-                !word.is_empty() && word.chars().all(|ch| ch.is_ascii_alphabetic())
-            });
+            let prev_is_ascii_word = is_nonempty_ascii_word(ctx.prev_word);
+            let next_is_ascii_word = match ctx.remaining_words.first() {
+                Some(word) => is_nonempty_ascii_word(word),
+                None => false,
+            };
             // Rule 37's PDF example, "그는 Can you help me?라고 도움을 요청했다.",
             // suppresses a whole-word sign for the first Roman word (`Can`) but retains
             // the UEB wordsign for the phrase-interior `you`. The adjacent-ASCII-word
@@ -243,7 +247,16 @@ mod tests {
     use super::*;
     use crate::rules::context::EncodingMode;
     use crate::unicode::decode_unicode;
-    use crate::{EncodeOptions, encode_with_options};
+    use crate::{EncodeOptions, encode_to_unicode, encode_with_options};
+
+    #[rstest::rstest]
+    #[case::empty("", false)]
+    #[case::ascii("help", true)]
+    #[case::korean("도움", false)]
+    #[case::punctuated("me?", false)]
+    fn classifies_adjacent_ascii_words(#[case] word: &str, #[case] expected: bool) {
+        assert_eq!(is_nonempty_ascii_word(word), expected);
+    }
 
     /// 제28항 — 영문자 점역. 소문자/대문자 모두 동일 점형으로 인코딩.
     #[rstest::rstest]
@@ -292,6 +305,16 @@ mod tests {
             default_mode: Some(EncodingMode::Korean),
         };
         assert_eq!(encode_with_options(input, &options).unwrap(), expected);
+    }
+
+    /// 제37항 PDF 문장 전체를 공개 encoder로 통과시켜, 첫 Roman 어절의
+    /// complete wordsign 억제와 뒤따르는 Roman phrase 경로를 함께 검증한다.
+    #[test]
+    fn rule_37_official_sentence_uses_shared_roman_engine() {
+        assert_eq!(
+            encode_to_unicode("그는 Can you help me?라고 도움을 요청했다.").unwrap(),
+            "⠈⠪⠉⠵⠀⠴⠠⠉⠁⠝⠀⠽⠀⠓⠑⠇⠏⠀⠍⠑⠦⠐⠣⠈⠥⠀⠊⠥⠍⠢⠮⠀⠬⠰⠻⠚⠗⠌⠊⠲"
+        );
     }
 
     /// UEB 5.7.2/5.8.1/10.9.7 complete-shortform handling through the complete

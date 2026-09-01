@@ -1,5 +1,54 @@
 use std::{borrow::Cow, cell::RefCell};
 
+/// Small, semantic-neutral predicates shared with the NIKL analysis example.
+/// Keeping them here lets the ordinary library test target verify analyzer
+/// input boundaries without making the whole example a coverage target.
+#[doc(hidden)]
+pub mod corpus_analysis {
+    /// Whether a corpus filename belongs to the deterministic sentence shards.
+    pub fn is_sentence_corpus_shard_name(name: &str) -> bool {
+        name.starts_with("sentence_") && name.ends_with(".json")
+    }
+
+    /// Whether the Unicode scalar immediately before `byte_index` is an ASCII
+    /// letter or digit. Callers provide a boundary from `str::char_indices`.
+    pub fn has_ascii_alphanumeric_before(input: &str, byte_index: usize) -> bool {
+        input
+            .get(..byte_index)
+            .unwrap_or_default()
+            .chars()
+            .next_back()
+            .is_some_and(|previous| previous.is_ascii_alphanumeric())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[rstest::rstest]
+        #[case::sentence_json("sentence_000.json", true)]
+        #[case::wrong_prefix("document_000.json", false)]
+        #[case::wrong_extension("sentence_000.txt", false)]
+        fn classifies_sentence_corpus_shard_names(#[case] name: &str, #[case] expected: bool) {
+            assert_eq!(is_sentence_corpus_shard_name(name), expected);
+        }
+
+        #[rstest::rstest]
+        #[case::start_of_input("A(14)", 0, false)]
+        #[case::ascii_letter("BA(14)", 1, true)]
+        #[case::ascii_digit("1A(14)", 1, true)]
+        #[case::korean_scalar("가A(14)", 3, false)]
+        #[case::non_scalar_boundary("가A(14)", 1, false)]
+        fn detects_ascii_alphanumeric_immediately_before_boundary(
+            #[case] input: &str,
+            #[case] byte_index: usize,
+            #[case] expected: bool,
+        ) {
+            assert_eq!(has_ascii_alphanumeric_before(input, byte_index), expected);
+        }
+    }
+}
+
 mod char_shortcut;
 pub(crate) mod char_struct;
 #[cfg(feature = "cli")]

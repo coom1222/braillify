@@ -272,7 +272,7 @@ fn load_cases() -> Result<Vec<LocatedCase>, String> {
     paths.retain(|path| {
         path.file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("sentence_") && name.ends_with(".json"))
+            .is_some_and(braillify::corpus_analysis::is_sentence_corpus_shard_name)
     });
     paths.sort();
     let shard_count = paths.len();
@@ -2393,10 +2393,7 @@ fn single_capital_parenthesized_digit_spans(input: &str) -> Vec<InputSpan> {
     let mut spans = Vec::new();
     for (start_byte, ch) in input.char_indices() {
         if !ch.is_ascii_uppercase()
-            || input[..start_byte]
-                .chars()
-                .next_back()
-                .is_some_and(|previous| previous.is_ascii_alphanumeric())
+            || braillify::corpus_analysis::has_ascii_alphanumeric_before(input, start_byte)
         {
             continue;
         }

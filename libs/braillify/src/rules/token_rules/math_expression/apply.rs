@@ -909,6 +909,9 @@ mod tests {
     #[case::function_with_spaced_argument("f(x y)", false)]
     #[case::missing_opening_parenthesis("Romeo Juliet)", false)]
     #[case::invalid_trailing_digit("(Romeo Juliet)1", false)]
+    #[case::digit_in_final_fragment("(Romeo Juliet2)", false)]
+    #[case::digit_after_opening("(2Romeo Juliet)", false)]
+    #[case::digit_in_earlier_fragment("(Romeo2 Juliet)", false)]
     fn recognizes_only_complete_multiword_roman_parenthetical_tails(
         #[case] input: &str,
         #[case] expected: bool,
@@ -927,6 +930,14 @@ mod tests {
             is_multiword_closed_roman_parenthetical_tail(&ir.tokens, index, word),
             expected
         );
+
+        if expected {
+            let mut state = EncoderState::new(false);
+            assert!(matches!(
+                run(&ir.tokens, index, &mut state).unwrap(),
+                TokenAction::Noop
+            ));
+        }
     }
 
     /// Decimal-context spacing recognizes each structural marker independently:
@@ -967,6 +978,19 @@ mod tests {
 
     fn space_tok() -> Token<'static> {
         Token::Space(SpaceKind::Regular)
+    }
+
+    /// The complete token-rule path must preserve both defensive boundaries:
+    /// an unsupported mixed-math glyph falls through, and a leading space with
+    /// no preceding math token is not treated as mixed-math continuation.
+    #[test]
+    fn unsupported_mixed_expression_after_leading_space_falls_through() {
+        let tokens = vec![space_tok(), word_tok("√분산🚀")];
+        let mut state = EncoderState::new(false);
+
+        let action = run(&tokens, 1, &mut state).unwrap();
+
+        assert!(matches!(action, TokenAction::Noop));
     }
 
     // ---------- Direct tests on extracted helpers ----------
