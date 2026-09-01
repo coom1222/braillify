@@ -1306,15 +1306,6 @@ mod test {
         bool,
     );
 
-    #[derive(serde::Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct TestStatusPageInfo {
-        page_size: usize,
-        page_count: usize,
-    }
-
-    const TEST_STATUS_PAGE_SIZE: usize = 250;
-
     #[derive(Default)]
     struct NiklFailureStats {
         encoding_errors: usize,
@@ -1726,52 +1717,6 @@ mod test {
             }
             println!("총 Skip: {}건", skipped_cases.len());
         }
-
-        // Large, sharded fixture groups are emitted as browser-loadable pages.
-        // Their aggregate counts stay in `test_status.json`, while the row list
-        // is loaded only after the matching landing-page tab is opened. This
-        // keeps every row available without embedding the entire corpus in the
-        // statically rendered page payload.
-        let paged_status_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../apps/landing/public/test-status");
-        let mut paged_status_manifest = std::collections::BTreeMap::new();
-        for (key, config) in &rule_map {
-            if !config.shards {
-                continue;
-            }
-
-            let stats = file_stats
-                .get_mut(key)
-                .unwrap_or_else(|| panic!("missing test status for sharded group {key}"));
-            let rows = std::mem::take(&mut stats.6);
-            let page_count = rows.len().div_ceil(TEST_STATUS_PAGE_SIZE);
-            let output_dir = paged_status_root.join(key);
-            std::fs::create_dir_all(&output_dir).unwrap_or_else(|error| {
-                panic!(
-                    "failed to create paged test-status directory {}: {error}",
-                    output_dir.display()
-                )
-            });
-
-            for (page_index, page) in rows.chunks(TEST_STATUS_PAGE_SIZE).enumerate() {
-                let page_path = output_dir.join(format!("page-{}.json", page_index + 1));
-                serde_json::to_writer(File::create(&page_path).unwrap(), page).unwrap();
-            }
-
-            paged_status_manifest.insert(
-                key.clone(),
-                TestStatusPageInfo {
-                    page_size: TEST_STATUS_PAGE_SIZE,
-                    page_count,
-                },
-            );
-        }
-        std::fs::create_dir_all(&paged_status_root).unwrap();
-        serde_json::to_writer_pretty(
-            File::create(paged_status_root.join("manifest.json")).unwrap(),
-            &paged_status_manifest,
-        )
-        .unwrap();
 
         // Write per-file stats to the workspace-root status file.
         let status_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test_status.json");

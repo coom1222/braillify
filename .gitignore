@@ -4,7 +4,6 @@ target/
 node_modules
 .df
 test_status.json
-/apps/landing/public/test-status/
 .venv
 __pycache__
 .pytest_cache
