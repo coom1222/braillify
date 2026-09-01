@@ -3226,7 +3226,7 @@ fn first_difference_in_tight_triangle(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
-/// Mirrors the existing token-normalization rule's narrow input shape: a
+/// Mirrors the removed token-normalization rule's narrow input shape: a
 /// whitespace-delimited Korean token ends in `있다` (optionally followed by a
 /// full stop) but contains no printed space before that suffix. Membership is
 /// descriptive; it does not decide whether orthography may override rule 49's
@@ -3254,8 +3254,9 @@ fn attached_korean_auxiliary_itda_spans(input: &str) -> Vec<InputSpan> {
     spans
 }
 
-/// Locates only the blank currently inserted immediately before `있다`, using
-/// the real input prefix rather than any reference cell.
+/// Locates only a blank inserted immediately before `있다`, using the real
+/// input prefix rather than any reference cell. After the rule-49 correction,
+/// this deliberately returns no ranges for the affected inputs.
 fn attached_korean_auxiliary_itda_actual_ranges(
     input: &str,
     actual: &str,
@@ -4542,7 +4543,7 @@ fn markdown(report: &AnalysisReport) -> String {
          `tight_triangle_mark_immediately_before_korean` gate requires literal \
          `△한글` with no input space and includes the first following Korean cell in its localized \
          output range, so an observed missing-space difference is measured at the mark boundary. \
-         The `attached_korean_auxiliary_itda_spacing` gate mirrors the current normalization \
+         The `attached_korean_auxiliary_itda_spacing` gate mirrors the former normalization \
          shape for a Korean token ending in attached `있다`; its localizer independently encodes \
          the real prefix and claims only the blank inserted before the suffix. It does not decide \
          whether orthographic correction may override the printed input.\n\n",
@@ -5808,16 +5809,25 @@ fn markdown(report: &AnalysisReport) -> String {
              the print input. The PDF consistently retains an explicit space in `그리고 있다` \
              (physical p.18), `살고 있다` (p.26), and `수강하고 있다` (p.30), but it gives no \
              example authorizing a transcriber to insert a missing print space. The current \
-             token normalizer nevertheless splits any Korean token ending in attached `있다`.\n\n\
-             The diagnostic baseline has {} candidates / {} exact / {} mismatch, preserving {} \
+             pre-fix token normalizer nevertheless split any Korean token ending in attached \
+             `있다`.\n\n\
+             The diagnostic baseline had 95 candidates / 0 exact / 95 mismatch. All 95 were in \
+             the exact former implementation scope; 74 first differences were at the inserted \
+             blank: 73 `{expected_attached}`, one `{other_attached}`, and no localized reverse. \
+             The absence of a baseline exact member is the in-scope regression control.\n\n\
+             After removing that input-correcting transformation, the cohort has {} candidates / \
+             {} exact / {} mismatch, preserving {} \
              `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, and {} \
-             `unsupported_character_review` mismatch primaries. Of {} evaluable mismatches, {} \
-             put the first difference exactly at the independently located inserted blank: {} \
-             `{expected_attached}`, {} `{other_attached}`, and {} `{expected_spaced}`. There are \
-             no exact members and no localized reverse; the three explicitly spaced PDF forms \
-             are the independent negative controls. This checkpoint records the scope before \
-             testing removal of the input-correcting normalizer; it does not infer a branch from \
-             the corpus reference.\n",
+             `unsupported_character_review` mismatch primaries. Of {} evaluable current \
+             mismatches, {} still localize to an inserted blank: {} `{expected_attached}`, {} \
+             `{other_attached}`, and {} `{expected_spaced}`. Seventy-one cases become exact; the \
+             other 24 retain independent earlier differences. Corpus exact increases by the same \
+             71 with zero exact-set regressions. The three explicitly spaced PDF forms remain \
+             full-encoder negative controls, so removing correction of missing input whitespace \
+             does not remove a printed space. The local rule-47 standard case had accidentally \
+             transcribed PDF physical p.36 `덮여 있다` as attached `덮여있다` while retaining the \
+             PDF's spaced braille; correcting that input transcription restores the complete \
+             5,141/5,141 standard summary without an engine exception.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -7975,13 +7985,12 @@ mod tests {
     }
 
     #[test]
-    fn localizes_current_inserted_blank_before_attached_itda() {
+    fn current_engine_does_not_insert_blank_before_attached_itda() {
         let input = "성장을 하고있다.";
         let actual = braillify::encode_to_unicode(input).expect("spacing probe must encode");
         let ranges = attached_korean_auxiliary_itda_actual_ranges(input, &actual);
 
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠀'));
+        assert!(ranges.is_empty());
     }
 
     #[test]
