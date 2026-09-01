@@ -339,6 +339,22 @@ mod tests {
         assert_eq!(owned.result, vec![20]);
     }
 
+    /// Rule 37's PDF sentence `Can you help me?` permits the phrase-interior
+    /// `you` wordsign because both adjacent whitespace-delimited words are Roman.
+    #[test]
+    fn rule_37_phrase_interior_word_uses_standalone_wordsign() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("you", true)
+            .with_prev_word("Can")
+            .with_remaining_words(["help", "me?"]);
+        let mut ctx = owned.ctx_at(0);
+
+        assert!(matches!(
+            Rule28.apply(&mut ctx).unwrap(),
+            RuleResult::Consumed
+        ));
+        assert_eq!(owned.result, vec![52, decode_unicode('⠽')]);
+    }
+
     #[test]
     fn apply_skips_non_korean() {
         let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);

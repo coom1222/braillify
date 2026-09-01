@@ -905,6 +905,10 @@ mod tests {
     #[case::ueb_letter_list("(q, r)", false)]
     #[case::math_function("f(x)", false)]
     #[case::operator_interrupts_prose_run("(x + y)", false)]
+    #[case::no_closing_parenthesis("Romeo Juliet", false)]
+    #[case::function_with_spaced_argument("f(x y)", false)]
+    #[case::missing_opening_parenthesis("Romeo Juliet)", false)]
+    #[case::invalid_trailing_digit("(Romeo Juliet)1", false)]
     fn recognizes_only_complete_multiword_roman_parenthetical_tails(
         #[case] input: &str,
         #[case] expected: bool,
@@ -921,6 +925,24 @@ mod tests {
 
         assert_eq!(
             is_multiword_closed_roman_parenthetical_tail(&ir.tokens, index, word),
+            expected
+        );
+    }
+
+    /// Decimal-context spacing recognizes each structural marker independently:
+    /// the parser sentinel, the Rule 12 ellipsis, and a combining math mark.
+    #[rstest::rstest]
+    #[case::unit_separator("a\u{001f}b", "ab", true)]
+    #[case::midline_ellipsis("a⋯b", "ab", true)]
+    #[case::combining_mark("ab", "a\u{0305}", true)]
+    #[case::plain_expression("a+b", "a+b", false)]
+    fn detects_decimal_context_spacing_markers(
+        #[case] text: &str,
+        #[case] chars: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            needs_decimal_context_spacing(text, &chars.chars().collect::<Vec<_>>()),
             expected
         );
     }

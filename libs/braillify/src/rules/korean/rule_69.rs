@@ -641,6 +641,15 @@ mod tests {
         }
     }
 
+    /// The compatibility-unit grammar sends only ASCII-letter runs here.
+    /// Rejecting a numeric component directly keeps that defensive contract
+    /// observable without weakening the accepted Rule 68/69 glyph set.
+    #[test]
+    fn unit_letter_encoder_rejects_non_letter_component() {
+        let error = encode_rule_69_unit_letters(&[std::hint::black_box('1')]).unwrap_err();
+        assert!(error.contains("cannot encode rule 69 Roman unit letters: 1"));
+    }
+
     #[test]
     fn every_rule_68_or_69_ascii_derivation_matches_every_owner_glyph() {
         for (spelling, owners) in compatibility_ascii_unit_owners() {

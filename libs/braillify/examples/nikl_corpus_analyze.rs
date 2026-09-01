@@ -7057,6 +7057,19 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn loads_all_sentence_corpus_shards_for_analysis() {
+        let cases = load_cases().expect("NIKL sentence shards must load");
+
+        assert_eq!(cases.len(), 83_528);
+        assert!(
+            cases
+                .iter()
+                .all(|located| located.shard.starts_with("sentence_")
+                    && located.shard.ends_with(".json"))
+        );
+    }
+
     #[rstest::rstest]
     #[case::zero_shards(0, 0, Some("no NIKL corpus shards"))]
     #[case::zero_cases(1, 0, Some("zero cases"))]
@@ -7341,6 +7354,12 @@ mod tests {
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn rejects_parenthesized_digits_after_an_ascii_letter() {
+        let input = std::hint::black_box(String::from("AB(14)"));
+        assert!(single_capital_parenthesized_digit_spans(&input).is_empty());
     }
 
     #[rstest::rstest]

@@ -464,6 +464,16 @@ mod tests {
         assert!(result.is_none());
     }
 
+    /// The PDF's `√분산` form is a mixed expression because the radical is
+    /// directly attached to Korean text; it must produce a concrete cell sequence.
+    #[test]
+    fn try_encode_mixed_math_slice_encodes_valid_expression() {
+        let chars = std::hint::black_box("√분산").chars().collect::<Vec<_>>();
+        let result = try_encode_mixed_math_slice(&chars, MathContext::default());
+
+        assert!(result.is_some());
+    }
+
     #[test]
     fn try_encode_mixed_math_prefix_encodes_math_prefix_before_korean_suffix() {
         let prefix: Vec<char> = "x²".chars().collect();
