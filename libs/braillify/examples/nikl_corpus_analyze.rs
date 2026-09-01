@@ -583,6 +583,7 @@ const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_befo
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
 const ALLCAPS_ROMAN_RUN_CONTAINING_ST: &str = "allcaps_roman_run_containing_st";
 const ALLCAPS_ROMAN_RUN_CONTAINING_AR: &str = "allcaps_roman_run_containing_ar";
+const ALLCAPS_ROMAN_RUN_CONTAINING_ED: &str = "allcaps_roman_run_containing_ed";
 const ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE: &str =
     "roman_run_after_whitespace_following_closed_roman_enclosure";
 const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
@@ -957,6 +958,10 @@ fn allcaps_roman_runs_containing_st(input: &str) -> Vec<InputSpan> {
 
 fn allcaps_roman_runs_containing_ar(input: &str) -> Vec<InputSpan> {
     allcaps_roman_runs_containing_pair(input, b"AR")
+}
+
+fn allcaps_roman_runs_containing_ed(input: &str) -> Vec<InputSpan> {
+    allcaps_roman_runs_containing_pair(input, b"ED")
 }
 
 fn enclosure_contains_ascii_roman(input: &str, closer_byte: usize, closer: char) -> bool {
@@ -1732,6 +1737,23 @@ fn first_difference_in_allcaps_ar_run(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn allcaps_ed_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+    current_engine_signature_ranges(input, actual, &allcaps_roman_runs_containing_ed(input), 0)
+}
+
+fn first_difference_in_allcaps_ed_run(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    allcaps_ed_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn roman_after_closed_enclosure_actual_ranges(
     input: &str,
     actual: &str,
@@ -2037,9 +2059,13 @@ fn first_difference_claimed_before_roman_after_closed_enclosure(item: &EncodedCa
     first_difference_claimed_before_allcaps_ar(item) || first_difference_in_allcaps_ar_run(item)
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_allcaps_ed(item: &EncodedCase) -> bool {
     first_difference_claimed_before_roman_after_closed_enclosure(item)
         || first_difference_in_roman_after_closed_enclosure(item)
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_allcaps_ed(item) || first_difference_in_allcaps_ed_run(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -2650,6 +2676,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ALLCAPS_ROMAN_RUN_CONTAINING_ED.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -2852,6 +2882,15 @@ fn analyze(
                 Some(
                     !first_difference_claimed_before_roman_after_closed_enclosure(item)
                         && first_difference_in_roman_after_closed_enclosure(item),
+                ),
+                true,
+            ),
+            (
+                ALLCAPS_ROMAN_RUN_CONTAINING_ED,
+                !allcaps_roman_runs_containing_ed(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_allcaps_ed(item)
+                        && first_difference_in_allcaps_ed_run(item),
                 ),
                 true,
             ),
@@ -4226,6 +4265,74 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(ALLCAPS_ROMAN_RUN_CONTAINING_ED)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_transition = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let raw_transition = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let residual_transition = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let target = "U+2811 ⠑ -> U+282B ⠫";
+        let reverse = "U+282B ⠫ -> U+2811 ⠑";
+        text.push_str(&format!(
+            "\n### Uppercase Roman runs containing `ED`\n\n\
+             UEB 10.12.1 (2024 UEB PDF pp.191-192, printed pp.163-164) requires \
+             separate letters when an abbreviation's letters are known to be pronounced \
+             separately, and its official `OED` example writes `e` and `d` separately. Rule \
+             10.12.2 otherwise uses contractions; its official `BEd` example uses the `ed` \
+             groupsign. Both full-encoder controls pass. Consequently an uppercase `ED` surface \
+             cannot establish pronunciation or abbreviation semantics by spelling alone.\n\n\
+             The cohort contains {} candidates, {} exact controls, and {} mismatches. Existing \
+             mismatch primary classes remain {} `pending_rule_review`, {} `corpus_suspect`, {} \
+             `comparison_method`, and {} `unsupported_character_review`. Of {} evaluable \
+             mismatches, {} are localized to the detected current-engine run: {} `{target}` and \
+             {} `{reverse}`. Across raw pending transitions and the final residual after localized \
+             cohorts, the target is {} -> {} and the reverse is {} -> {}. Corpus initialisms such \
+             as `LED` and `GED` require external pronunciation knowledge, while exact and official \
+             controls preserve contraction-bearing outcomes. No engine change or primary \
+             reclassification is made; representative shard/index samples are retained above.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_transition(target),
+            localized_transition(reverse),
+            raw_transition(target),
+            residual_transition(target),
+            raw_transition(reverse),
+            residual_transition(reverse),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(ALLCAPS_ROMAN_RUN_CONTAINING_ST)
     {
         let primary_count = |name: &str| {
@@ -5495,6 +5602,32 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::initialisms("OED LED GED", vec!["OED", "LED", "GED"])]
+    #[case::lowercase("Ed", vec![])]
+    #[case::mixed_case("eD", vec![])]
+    #[case::no_ed("WHO", vec![])]
+    #[case::digit_prefix("1LED", vec![])]
+    #[case::digit_suffix("LED2", vec![])]
+    fn detects_allcaps_roman_runs_containing_ed(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let actual = allcaps_roman_runs_containing_ed(input)
+            .into_iter()
+            .map(|run| &input[run.start_byte..run.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    /// UEB 10.12.1-10.12.2 supply both `ed` outcomes for abbreviations.
+    #[rstest::rstest]
+    #[case::separate_letters("OED", "⠠⠠⠕⠑⠙")]
+    #[case::contracted_abbreviation("BEd", "⠠⠃⠠⠫")]
+    fn full_encoder_preserves_official_ueb_ed_controls(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(braillify::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    #[rstest::rstest]
     #[case::parenthetical_then_comma("인공지능(AI), ChatGTP", vec!["ChatGTP"])]
     #[case::parenthetical_then_plain("액티브(H) ETF", vec!["ETF"])]
     #[case::parenthetical_then_quoted("다목적선(MPV) ‘HMM 울산호’", vec!["HMM"])]
@@ -5795,6 +5928,18 @@ mod tests {
     fn localizes_allcaps_ar_signature_in_complete_output(#[case] input: &str) {
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = allcaps_ar_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::light_emitting_diode("마이크로 LED")]
+    #[case::education_database("데이터베이스(GED)")]
+    fn localizes_allcaps_ed_signature_in_complete_output(#[case] input: &str) {
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = allcaps_ed_actual_ranges(input, &actual);
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
