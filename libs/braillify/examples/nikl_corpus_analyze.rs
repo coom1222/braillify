@@ -2904,13 +2904,27 @@ fn markdown(report: &AnalysisReport) -> String {
          UEB rule 5.6.1 says the numeric indicator establishes grade-1 mode, and \
          rule 5.6.2 ends that mode at a space, hyphen, dash, or grade-1 terminator; \
          a capitalization indicator is not a terminator. Korean rule 35 likewise \
-         keeps Roman letters and an adjacent number in one Roman section. The 330 \
-         localized `⠠ -> ⠰` cases therefore identify a separate possible redundant \
-         continuation at the digit-to-capital boundary. This cohort is not merged \
-         with the shortform-prefix route: the one reverse case and the absence of \
-         same-surface exact controls among frequent forms such as `B2B`, `V2X`, \
-         `Li2S`, and `O4O` require an independent state-machine audit before any \
-         engine change.\n\n\
+         keeps Roman letters and an adjacent number in one Roman section. The PDF's \
+         printed `3b`, `3B`, and `3m` examples distinguish the three following-letter \
+         classes: lowercase `a`-`j` retains `⠰` because its cells are numeric, a \
+         capital uses its capitalization indicator, and lowercase `k`-`z` needs no \
+         extra indicator. `Braille4All`, `M4G`, and `W1N` independently confirm the \
+         capital boundary inside longer alphanumeric strings. Before the engine \
+         change this cohort contained 330 localized `⠠ -> ⠰` cases. A blanket \
+         digit-to-letter removal reached 67,000/83,528 (+317) but was rejected: \
+         retaining `⠰` only for lowercase `a`-`j` recovers 10 exact cases and raises \
+         the result to 67,010. The wrapper control also exposes a separate routing \
+         boundary: a numeric run already preceded by an ASCII letter is part of the \
+         Roman identifier, not a fresh rule-69 compact unit. Preserving the rule-69 \
+         path for genuinely numeric-leading units while excluding that identifier \
+         boundary adds 2 more exact cases, for a final 67,012 (+329). The uppercase \
+         cohort moves from 756 exact / 1,140 mismatch / 330 target-localized / 1 \
+         reverse to 1,078 exact / 818 mismatch / 0 target-localized / 1 reverse. The remaining \
+         non-exact members are not attributed to the removed uppercase transition: \
+         their sentence-level first difference may lie in another structure and \
+         remains under its existing primary class. This numeric state change remains \
+         separate from both the complete-shortform guard and the still-unimplemented \
+         hyphen continuation cohort.\n\n\
          ### Uppercase immediately after a hyphen\n\n\
          UEB rule 5.7.2 prints `CD-ROM` with one grade-1 indicator before `CD` and \
          no second grade-1 indicator after the hyphen. Korean rule 29 similarly \

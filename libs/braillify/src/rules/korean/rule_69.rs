@@ -181,8 +181,26 @@ pub fn is_rule_69_symbol(c: char) -> bool {
 }
 
 fn is_numeric_or_unit_context(ctx: &RuleContext) -> bool {
-    ctx.prev_char()
-        .is_some_and(|prev| prev.is_ascii_digit() || matches!(prev, '/' | 'μ'))
+    let mut numeric_start = ctx.index;
+    while numeric_start > 0
+        && (ctx.word_chars[numeric_start - 1].is_ascii_digit()
+            || matches!(ctx.word_chars[numeric_start - 1], ',' | '.'))
+    {
+        numeric_start -= 1;
+    }
+    let compact_numeric_prefix = numeric_start < ctx.index
+        && ctx.word_chars[numeric_start..ctx.index]
+            .iter()
+            .any(char::is_ascii_digit)
+        && numeric_start
+            .checked_sub(1)
+            .and_then(|index| ctx.word_chars.get(index))
+            .is_none_or(|previous| !previous.is_ascii_alphabetic());
+
+    compact_numeric_prefix
+        || ctx
+            .prev_char()
+            .is_some_and(|prev| matches!(prev, '/' | 'μ'))
         || ctx.prev_word.chars().next().is_some()
             && ctx
                 .prev_word

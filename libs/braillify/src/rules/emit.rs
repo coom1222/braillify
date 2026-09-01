@@ -520,9 +520,14 @@ fn emit_word(
             if state.roman_number_chain && !state.is_english {
                 match &char_type {
                     CharType::English(_) => {
-                        // PDF — roman_number_chain 안 digit 뒤 letter는 영어 연속 표지(⠰)를
-                        // 부착해 letter임을 명시한다 (digit과 혼동 방지).
-                        result.push(48);
+                        // Korean rule 35 keeps adjacent Roman letters and digits in
+                        // one Roman section. Under UEB 6.5.2, lowercase a-j still
+                        // need grade 1 after a digit because their cells are numeric;
+                        // a capital indicator or a lowercase k-z cell is sufficient
+                        // for every other Roman letter class.
+                        if matches!(*c, 'a'..='j') {
+                            result.push(crate::rules::korean::rule_29::ENGLISH_CONTINUATION);
+                        }
                         roman_mode::resume_english_from_roman_number_chain(state);
                     }
                     CharType::Number(_) => {}
@@ -879,6 +884,50 @@ mod tests {
         let out = encode("KBS 1 TV 좀 켜 주세요.").unwrap();
 
         assert_eq!(out.iter().filter(|byte| **byte == 52).count(), 1);
+    }
+
+    /// UEB 5.6.1/6.5.1-6.5.2 through the rule-29/35 character route. `A` is only
+    /// the Roman-chain routing scaffold for the PDF's exact `3b`, `3B`, and `3m`
+    /// suffixes; those cases directly cover lowercase a-j grade 1, capitalization,
+    /// and unmarked lowercase k-z. Comparison starts immediately after the route's
+    /// single Roman indicator, so another occurrence cannot satisfy the assertion.
+    #[rstest::rstest]
+    #[case::braille4all("Braille4All", "⠠⠃⠗⠁⠊⠇⠇⠑⠼⠙⠠⠁⠇⠇")]
+    #[case::m4g("M4G", "⠠⠍⠼⠙⠠⠛")]
+    #[case::w1n("W1N", "⠠⠺⠼⠁⠠⠝")]
+    #[case::lower_a_to_j("A3b", "⠠⠁⠼⠉⠰⠃")]
+    #[case::uppercase("A3B", "⠠⠁⠼⠉⠠⠃")]
+    #[case::lower_k_to_z("A3m", "⠠⠁⠼⠉⠍")]
+    fn numeric_grade1_mode_continues_into_pdf_roman_examples(
+        #[case] surface: &str,
+        #[case] expected_ueb: &str,
+    ) {
+        let output = encode(&format!("가({surface})")).unwrap();
+        let expected_ueb = expected_ueb
+            .chars()
+            .map(crate::unicode::decode_unicode)
+            .collect::<Vec<_>>();
+        let roman_start = output
+            .iter()
+            .position(|cell| *cell == crate::rules::korean::rule_29::ROMAN_INDICATOR)
+            .expect("Korean wrapper must enter one Roman section")
+            + 1;
+
+        assert_eq!(
+            output.get(roman_start..roman_start + expected_ueb.len()),
+            Some(expected_ueb.as_slice())
+        );
+    }
+
+    /// UEB 6.5.2 full-encoder controls for the three Roman letter classes after
+    /// a digit: lowercase a-j needs grade 1, capitals use their capital indicator,
+    /// and lowercase k-z needs no additional indicator.
+    #[rstest::rstest]
+    #[case::lower_a_to_j("3b", "⠼⠉⠰⠃")]
+    #[case::uppercase("3B", "⠼⠉⠠⠃")]
+    #[case::lower_k_to_z("3m", "⠼⠉⠍")]
+    fn numeric_grade1_letter_class_pdf_controls(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
     }
 
     #[test]
