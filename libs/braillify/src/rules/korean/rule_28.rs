@@ -113,8 +113,14 @@ impl BrailleRule for Rule28 {
                     .take_while(|ch| ch.is_ascii_alphabetic())
                     .count();
             let run = &ctx.word_chars[ctx.index..run_end];
-            let caps_already_emitted =
-                ctx.is_all_uppercase && ctx.word_len() >= 2 && ctx.ascii_starts_at_beginning;
+            // The token rule pre-emits capitals-word mode only for the initial
+            // uppercase letters-sequence. UEB 8.4.2 ends that mode at a
+            // nonletter, so a later run (the final `T` in official `AT&T`)
+            // must produce its own capitalization indicator.
+            let caps_already_emitted = ctx.index == 0
+                && ctx.is_all_uppercase
+                && ctx.word_len() >= 2
+                && ctx.ascii_starts_at_beginning;
             let is_whole_lowercase_word = ctx.index == 0
                 && run_end == ctx.word_chars.len()
                 && run.iter().all(|ch| ch.is_ascii_lowercase());

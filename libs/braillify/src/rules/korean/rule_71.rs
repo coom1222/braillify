@@ -247,6 +247,20 @@ mod tests {
         assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
     }
 
+    /// UEB 8.4.2 ends capitals word mode at the nonalphabetic ampersand.
+    /// Wrapping the official UEB 3.1.1 examples in neutral Korean text proves
+    /// that the mixed-document rule-28/29 path restarts capitalization for the
+    /// next ASCII-letter segment while keeping one Roman section.
+    #[rstest::rstest]
+    #[case::official_at_and_t("가 AT&T 나", "⠫⠀⠴⠠⠠⠁⠞⠈⠯⠠⠞⠲⠀⠉")]
+    #[case::official_b_and_b("가 B&B 나", "⠫⠀⠴⠠⠃⠈⠯⠠⠃⠲⠀⠉")]
+    fn korean_wrapper_preserves_ampersand_capitalization_extent(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(crate::encode_to_unicode(input).as_deref(), Ok(expected));
+    }
+
     /// Korean Rule 71's spaced Hangul example remains an independently
     /// delimited information symbol after the attached-Roman exception.
     #[test]

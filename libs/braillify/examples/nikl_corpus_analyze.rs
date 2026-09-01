@@ -596,6 +596,8 @@ const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
     "attached_ascii_roman_segments_joined_by_ampersand";
 const UPPERCASE_ASCII_SEGMENTS_JOINED_BY_AMPERSAND: &str =
     "uppercase_ascii_segments_joined_by_ampersand_capitalization";
+const CAPITALS_WORD_NONLETTER_CHANGE_SCOPE: &str =
+    "capitals_word_mode_previously_spanning_nonletter_scope";
 const AMPERSAND_BEFORE_ATTACHED_ASCII_ROMAN_SEGMENT: &str =
     "ampersand_before_attached_ascii_roman_segment";
 const SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS: &str = "spaced_comma_between_ascii_digit_runs";
@@ -1143,6 +1145,60 @@ fn uppercase_ascii_ampersand_spans(input: &str) -> Vec<InputSpan> {
                     .all(|segment| segment.bytes().all(|byte| byte.is_ascii_uppercase()))
         })
         .collect()
+}
+
+/// Reproduces the complete input scope of the former token-level capitals-word
+/// predicate where it can change output: a whitespace-delimited token starts
+/// with ASCII, has no lowercase ASCII letters, and an uppercase letter occurs
+/// again after an intervening nonletter. UEB 8.4.2 says that nonletter
+/// terminates capitals word mode. A trailing digit or Korean suffix after the
+/// final uppercase run is excluded because both old and new paths emit the
+/// same capitals indicator before that run. This broad scope audit measures
+/// regressions; unlike the ampersand cohort it does not claim that the first
+/// difference belongs to one particular symbol.
+fn capitals_word_nonletter_change_scope_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = Vec::new();
+    let mut start_byte = 0usize;
+    for (end_byte, ch) in input
+        .char_indices()
+        .chain(std::iter::once((input.len(), ' ')))
+    {
+        if ch != ' ' {
+            continue;
+        }
+        if start_byte < end_byte {
+            let token = &input[start_byte..end_byte];
+            let token_chars = token.chars().collect::<Vec<_>>();
+            let ascii_letters = token_chars
+                .iter()
+                .copied()
+                .filter(|candidate| candidate.is_ascii_alphabetic())
+                .collect::<Vec<_>>();
+            let uppercase_after_nonletter = token_chars.iter().enumerate().any(|(index, ch)| {
+                ch.is_ascii_uppercase()
+                    && token_chars[..index]
+                        .iter()
+                        .any(|previous| !previous.is_ascii_alphabetic())
+            });
+            if token
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+                && ascii_letters.len() >= 2
+                && ascii_letters
+                    .iter()
+                    .all(|letter| letter.is_ascii_uppercase())
+                && uppercase_after_nonletter
+            {
+                spans.push(InputSpan {
+                    start_byte,
+                    end_byte,
+                });
+            }
+        }
+        start_byte = end_byte + 1;
+    }
+    spans
 }
 
 /// Finds an ampersand immediately followed by a complete ASCII-letter segment
@@ -3580,6 +3636,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            CAPITALS_WORD_NONLETTER_CHANGE_SCOPE.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3831,6 +3891,12 @@ fn analyze(
                 !uppercase_ascii_ampersand_spans(&item.located.case.input).is_empty(),
                 Some(first_difference_in_uppercase_ascii_ampersand(item)),
                 true,
+            ),
+            (
+                CAPITALS_WORD_NONLETTER_CHANGE_SCOPE,
+                !capitals_word_nonletter_change_scope_spans(&item.located.case.input).is_empty(),
+                None,
+                false,
             ),
             (
                 ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND,
@@ -4564,6 +4630,11 @@ fn markdown(report: &AnalysisReport) -> String {
          token-level capitals-word pre-emission scope; Korean-attached and punctuation-prefixed \
          occurrences remain controls. UEB 8.4.2 says a nonalphabetic symbol terminates capitals word mode, while the \
          official `AT&T` and `B&B` examples restart capitalization after `&`. The broader \
+         `capitals_word_mode_previously_spanning_nonletter_scope` gate reproduces the former \
+         token predicate across ampersands, hyphens, digits, and other nonletters that separate \
+         uppercase runs. Trailing nonletters after the final run are excluded because their \
+         output is unchanged. It is a \
+         broad change-scope/regression audit and is deliberately not an output-cause localizer. The \
          `attached_ascii_roman_segments_joined_by_ampersand` gate requires non-empty ASCII-letter \
          segments joined directly by `&`, excludes spaced/Korean/alphanumeric continuations, and \
          localizes only the current output cell immediately before the ampersand through an \
@@ -5492,15 +5563,19 @@ fn markdown(report: &AnalysisReport) -> String {
              non-alphanumeric outer boundaries as the existing Roman-ampersand rule, and requires \
              the run to begin its whitespace-delimited token. Korean-attached and \
              punctuation-prefixed occurrences stay outside the change scope.\n\n\
-             The current baseline contains {} candidates, {} exact controls, and {} mismatches. \
-             Existing mismatch primaries remain {} `pending_rule_review`, {} `corpus_suspect`, {} \
+             At the analyzer-only checkpoint this cohort contained 439 candidates, 1 exact \
+             control, 438 mismatches, and 220 first differences localized inside the independently \
+             reproduced Korean-context signature. After the general capitalization correction it \
+             contains {} candidates, {} exact controls, and {} mismatches. Existing remaining \
+             mismatch primaries are {} `pending_rule_review`, {} `corpus_suspect`, {} \
              `comparison_method`, and {} `unsupported_character_review`. Of {} evaluable \
-             mismatches, {} have their first difference inside the independently reproduced \
-             Korean-context output signature. The cohort table above retains the transition \
-             distribution and shard/index samples. Because capitalization extent is fixed by the \
-             official symbol examples and does not require pronunciation or corpus semantics, this \
-             is a high-confidence implementation candidate; the diagnostic itself does not change \
-             any primary class.\n",
+             mismatches, {} have their first difference inside that signature. The sole pre-change \
+             exact member contained lowercase Roman text later in the same whitespace token and \
+             was outside the production predicate's actual change scope; its primary outcome was \
+             preserved. The cohort table above retains the transition distribution and shard/index \
+             samples. Capitalization extent is fixed by the official symbol examples and requires \
+             neither pronunciation nor corpus semantics; the diagnostic never changes a primary \
+             class.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -5510,6 +5585,31 @@ fn markdown(report: &AnalysisReport) -> String {
             primary_count("unsupported_character_review"),
             stats.output_signature_mismatches_evaluated,
             stats.first_difference_in_output_signature,
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(CAPITALS_WORD_NONLETTER_CHANGE_SCOPE)
+    {
+        text.push_str(&format!(
+            "\n### Capitals-word nonletter change-scope audit\n\n\
+             This input-only scope exactly mirrors the former token predicate where it could \
+             incorrectly carry capitals-word handling across a nonletter. UEB 8.4.2 terminates \
+             that mode at the nonletter. Trailing nonletters after the final uppercase run are \
+             excluded because their output is unchanged. Before the correction all 1,733 \
+             candidates were mismatches and none was exact. The current run has {} candidates, \
+             {} exact controls, and {} mismatches. A complete exact-ID set audit found 852 newly \
+             exact cases and zero cases lost from the 68,439-exact baseline, yielding \
+             69,291/83,528 (82.96%). Two deliberately rejected wider predicates exposed why the \
+             boundary matters: requiring an entirely uppercase-only token lost 87 former exact \
+             cases, while treating every initial uppercase run as token-level capitals mode lost \
+             33 mixed-case controls such as the UEB `TVOntario` class by bypassing its required \
+             capitals terminator. The retained predicate pre-emits only when the initial run has \
+             at least two capitals and every ASCII letter in the token is uppercase; Rule 28 \
+             independently restarts capitalization after the nonletter. This cohort remains a \
+             regression audit only: membership does not assign a primary class or attribute a \
+             first difference.\n",
+            stats.candidates, stats.exact, stats.mismatch,
         ));
     }
     if let Some(stats) = report
@@ -6777,7 +6877,8 @@ fn markdown(report: &AnalysisReport) -> String {
          | Rules 29/71 complete attached Roman ampersand run | 5,141/5,141 | 67,715/83,528 | 81.07% | Complete ASCII-letter segments joined by `&` retain one Roman section; official `AT&T`, `B&B`, and spaced Korean Rule-71 controls delimit the safe boundary; 273 cases became exact |\n\
          | Rules 29/39 Roman-to-Korean mode ownership | 5,141/5,141 | 68,101/83,528 | 81.53% | Same-token Korean is wrapped only in a Roman-majority document or the official dot-delimited `www.대통령.kr` domain shape; all three rule-39 PDF controls remain exact and 386 corpus cases became exact |\n\
          | Rules 29/34 multiword Roman parenthetical continuity | 5,141/5,141 | 68,175/83,528 | 81.62% | A backwards-verified, closed letter-and-space Roman parenthetical tail stays on the prose route; function calls, digits, operators, nested brackets, and punctuation-separated forms remain outside; 74 cases became exact |\n\
-         | Rules 29/32/71 ampersand before attached Roman segment | 5,141/5,141 | 68,187/83,528 | 81.63% | Official UEB `&c`, `AT&T`, and `B&B` keep one Roman section across attached `&`; the spaced Korean Rule-71 example, left ASCII alphanumerics, repeated ampersands, and trailing digits delimit the gate; 12 cases became exact |\n",
+         | Rules 29/32/71 ampersand before attached Roman segment | 5,141/5,141 | 68,187/83,528 | 81.63% | Official UEB `&c`, `AT&T`, and `B&B` keep one Roman section across attached `&`; the spaced Korean Rule-71 example, left ASCII alphanumerics, repeated ampersands, and trailing digits delimit the gate; 12 cases became exact |\n\
+         | UEB 8.4.2 capitals-word nonletter boundary | 5,141/5,141 | 69,291/83,528 | 82.96% | Starting from the accepted 68,439-exact checkpoint, capitals-word handling ends at each nonletter and later uppercase runs restart independently; official `AT&T`, `B&B`, `MP3`, and `TVOntario` delimit the token/span boundary; 852 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
@@ -7472,6 +7573,26 @@ mod tests {
                 .collect::<String>(),
             signature
         );
+    }
+
+    #[rstest::rstest]
+    #[case::ampersand("R&D", vec!["R&D"])]
+    #[case::attached_korean_suffix("S&P는", vec!["S&P는"])]
+    #[case::alphanumeric_restart("A1B", vec!["A1B"])]
+    #[case::pure_letters_excluded("PURE", vec![])]
+    #[case::korean_prefix_excluded("가(R&D)", vec![])]
+    #[case::lowercase_excluded("R&d", vec![])]
+    #[case::trailing_digit_excluded("MP3", vec![])]
+    #[case::trailing_korean_excluded("KDI에", vec![])]
+    fn detects_former_capitals_word_nonletter_change_scope(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = capitals_word_nonletter_change_scope_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 
     #[rstest::rstest]
