@@ -603,6 +603,8 @@ const ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD: &str =
     "roman_parenthetical_headword_after_whitespace_following_korean_word";
 const KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX: &str =
     "korean_prefixed_roman_parenthetical_followed_by_allcaps_hyphen_suffix";
+const CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY: &str =
+    "uppercase_word_after_whitespace_continuing_ascii_roman_text";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
@@ -1209,6 +1211,50 @@ fn korean_prefixed_roman_parenthetical_hyphen_suffix_spans(input: &str) -> Vec<I
     spans
 }
 
+/// Finds an uppercase word-start run after whitespace when the preceding
+/// whitespace-delimited word ends in an ASCII letter. Korean rule 29 treats
+/// consecutive Roman text as one section, but the uppercase token phase can
+/// independently request another entry before this second word. Punctuation
+/// and non-letter endings deliberately break this structural gate.
+fn consecutive_roman_uppercase_word_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    for (start_byte, ch) in input.char_indices() {
+        if !ch.is_ascii_uppercase()
+            || !input[..start_byte]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+        {
+            continue;
+        }
+        let before = input[..start_byte].trim_end_matches(char::is_whitespace);
+        if !before
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            continue;
+        }
+        let mut end_byte = start_byte;
+        while bytes.get(end_byte).is_some_and(u8::is_ascii_uppercase) {
+            end_byte += 1;
+        }
+        if end_byte - start_byte >= 2
+            && !input[end_byte..]
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_alphabetic())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    spans
+}
+
 /// Locates each detected run in the full current-engine output by searching
 /// for that run's independently encoded signature. This uses neither the
 /// corpus reference nor a hard-coded braille value.
@@ -1596,7 +1642,23 @@ fn first_difference_claimed_before_roman_entry_residual(item: &EncodedCase) -> b
         )
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_in_current_roman_entry_signature(
+    item: &EncodedCase,
+    spans: &[InputSpan],
+) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    roman_entry_signature_ranges(&item.located.case.input, actual, spans, 0)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
+fn first_difference_claimed_before_consecutive_roman_reentry(item: &EncodedCase) -> bool {
     first_difference_claimed_before_roman_entry_residual(item)
         || first_difference_at_input_span_entry(
             item,
@@ -1612,6 +1674,14 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
             item,
             &korean_prefixed_roman_parenthetical_hyphen_suffix_spans(&item.located.case.input),
             2,
+        )
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_consecutive_roman_reentry(item)
+        || first_difference_in_current_roman_entry_signature(
+            item,
+            &consecutive_roman_uppercase_word_spans(&item.located.case.input),
         )
 }
 
@@ -2286,6 +2356,10 @@ fn analyze(
             KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
+        (
+            CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
@@ -2547,6 +2621,18 @@ fn analyze(
                                 &item.located.case.input,
                             ),
                             2,
+                        ),
+                ),
+                true,
+            ),
+            (
+                CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY,
+                !consecutive_roman_uppercase_word_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_consecutive_roman_reentry(item)
+                        && first_difference_in_current_roman_entry_signature(
+                            item,
+                            &consecutive_roman_uppercase_word_spans(&item.located.case.input),
                         ),
                 ),
                 true,
@@ -3318,6 +3404,57 @@ fn markdown(report: &AnalysisReport) -> String {
          reference-order contradiction. Consequently none of these measurements authorizes an \
          engine change; they are deterministic pending/corpus-review diagnostics only.\n\n"
     ));
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        let target = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2820 ⠠ -> U+2834 ⠴")
+            .copied()
+            .unwrap_or(0);
+        let grade1_to_roman = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2830 ⠰ -> U+2834 ⠴")
+            .copied()
+            .unwrap_or(0);
+        let reverse = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2834 ⠴ -> U+2820 ⠠")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "### Consecutive Roman uppercase-word re-entry\n\n\
+             Korean rule 29 explicitly says that when two or more Roman items occur \
+             consecutively, the Roman indicator is placed only before the first and the \
+             terminator only after the last. Its printed `Los Angeles` and `Table of Contents` \
+             examples exercise multiword Roman sections; the rule-28 appendix independently \
+             supplies capitalization indicators inside that section. The current token phase can \
+             nevertheless insert an explicit Roman-entry event before a later uppercase word when \
+             the preceding Roman run began inside a mixed Korean/punctuation word. The character \
+             emitter is still in Roman mode at that point, so this is a candidate duplicate-event \
+             boundary rather than permission to rewrite arbitrary multiword ASCII text.\n\n\
+             Baseline measurement: {} candidates, {} exact controls, {} mismatches, {pending} \
+             pending members, and {}/{} evaluable mismatches localized to the current re-entry \
+             signature. The localized transitions are {target} `⠠ -> ⠴`, \
+             {grade1_to_roman} `⠰ -> ⠴`, and {reverse} reverse `⠴ -> ⠠`; the remaining localized \
+             transitions stay separate. Exact controls include contexts where the first Roman word \
+             already opened token-level mode, while parenthesized/mixed-token examples expose the \
+             duplicate event. Any engine experiment must therefore suppress only an explicit entry \
+             encountered while final emit state is already Roman, then audit all exact regressions \
+             and the complete 5,141-case standard suite.\n\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
     text.push_str(
         "\nThe HCA-style headword-expansion shape described above is not an engine \
          implementation premise. The 2024 PDF's math rule 6 \
@@ -4605,6 +4742,40 @@ mod tests {
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::mixed_then_allcaps("Neo QLED는", vec!["QLED"])]
+    #[case::allcaps_pair("DO DREAM)", vec!["DREAM"])]
+    #[case::pdf_capital_passage("WELCOME TO KOREA", vec!["TO", "KOREA"])]
+    #[case::punctuation_break("Neo. QLED는", vec![])]
+    #[case::mixed_case_second("Neo Qled는", vec![])]
+    #[case::korean_previous("한글 QLED는", vec![])]
+    fn detects_consecutive_roman_uppercase_word_reentry(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = consecutive_roman_uppercase_word_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_current_reentry_before_consecutive_uppercase_word() {
+        let input = "가 Neo QLED는";
+        let spans = consecutive_roman_uppercase_word_spans(input);
+        let actual = braillify::encode_to_unicode(input).expect("Roman reentry probe must encode");
+        let ranges = roman_entry_signature_ranges(input, &actual, &spans, 0);
+        let starts = ranges
+            .iter()
+            .map(|range| range.start)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(starts.len(), 1);
+        assert_eq!(actual.chars().nth(*starts.first().unwrap()), Some('⠴'));
     }
 
     #[rstest::rstest]
