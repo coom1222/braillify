@@ -595,6 +595,7 @@ const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
     "attached_ascii_roman_segments_joined_by_ampersand";
 const AMPERSAND_BEFORE_ATTACHED_ASCII_ROMAN_SEGMENT: &str =
     "ampersand_before_attached_ascii_roman_segment";
+const SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS: &str = "spaced_comma_between_ascii_digit_runs";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
@@ -1147,6 +1148,41 @@ fn ampersand_before_attached_ascii_roman_spans(input: &str) -> Vec<InputSpan> {
         });
     }
     spans
+}
+
+/// Finds a comma immediately after an ASCII digit and followed, after one or
+/// more whitespace characters, by another ASCII digit. Korean rule 41 is
+/// explicitly limited to a comma *attached* between digits, so this cohort
+/// isolates spaced numeric-list punctuation without claiming Roman prose
+/// commas or attached digit grouping.
+fn spaced_comma_between_ascii_digit_run_spans(input: &str) -> Vec<InputSpan> {
+    input
+        .match_indices(',')
+        .filter_map(|(comma_byte, comma)| {
+            input[..comma_byte]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_digit())
+                .then_some(())?;
+
+            let after_comma = comma_byte + comma.len();
+            let mut following = input[after_comma..].char_indices();
+            let (first_offset, first) = following.next()?;
+            if first_offset != 0 || !first.is_whitespace() {
+                return None;
+            }
+
+            let (digit_offset, digit) = following.find(|(_, ch)| !ch.is_whitespace())?;
+            if !digit.is_ascii_digit() {
+                return None;
+            }
+
+            Some(InputSpan {
+                start_byte: comma_byte,
+                end_byte: after_comma + digit_offset + digit.len_utf8(),
+            })
+        })
+        .collect()
 }
 
 /// Finds maximal pure-uppercase ASCII letter runs whose beginning is itself a
@@ -2033,6 +2069,44 @@ fn first_difference_after_ampersand_before_ascii_roman(item: &EncodedCase) -> bo
         .any(|range| range.contains(&first_difference))
 }
 
+/// Locates the emitted comma cell by encoding the real prefix immediately
+/// before each occurrence. The prefix must match the complete current output,
+/// so another comma elsewhere in the sentence cannot satisfy the audit.
+fn spaced_numeric_list_comma_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    spaced_comma_between_ascii_digit_run_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).ok()?;
+            let prefix_cells = prefix.chars().collect::<Vec<_>>();
+            if !actual_cells.starts_with(&prefix_cells) || prefix_cells.len() >= actual_cells.len()
+            {
+                return None;
+            }
+            Some((prefix_cells.len(), prefix_cells.len() + 1))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(start, end)| start..end)
+        .collect()
+}
+
+fn first_difference_at_spaced_numeric_list_comma(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    spaced_numeric_list_comma_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 /// Finds a standalone single capital immediately followed by a non-empty,
 /// closed ASCII-digit parenthetical, such as `A(14)`. The span is deliberately
 /// semantic-neutral: prose labels and mathematical function notation can share
@@ -2386,6 +2460,7 @@ fn first_difference_claimed_before_consecutive_ascii_roman_boundary(item: &Encod
 fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
     first_difference_claimed_before_consecutive_ascii_roman_boundary(item)
         || first_difference_at_consecutive_ascii_roman_word_boundary(item)
+        || first_difference_at_spaced_numeric_list_comma(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3262,6 +3337,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3500,6 +3579,12 @@ fn analyze(
                     !first_difference_claimed_before_allcaps_ar(item)
                         && first_difference_after_ampersand_before_ascii_roman(item),
                 ),
+                true,
+            ),
+            (
+                SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS,
+                !spaced_comma_between_ascii_digit_run_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_at_spaced_numeric_list_comma(item)),
                 true,
             ),
             (
@@ -5263,6 +5348,78 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_count = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let raw_count = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let residual_count = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let korean_to_ueb = "U+2810 ⠐ -> U+2802 ⠂";
+        let ueb_to_korean = "U+2802 ⠂ -> U+2810 ⠐";
+        text.push_str(&format!(
+            "\n### Spaced comma between ASCII digit runs\n\n\
+             This output-localized cohort requires a comma immediately after an ASCII digit, \
+             one or more following whitespace characters, and another ASCII digit. Korean rule \
+             41 (2024 Korean-rules PDF p.33, printed p.27) assigns `⠂` only when the comma is \
+             *attached* between digits, as in the exact control `9,375명`; rule 49 (PDF \
+             pp.37-38, printed pp.31-32) assigns the ordinary Korean comma `⠐`, illustrated by \
+             `근면, 검소, 협동은 ...`. Rule 33 (PDF p.28, printed p.22) independently keeps \
+             Korean punctuation at Roman-to-Korean boundaries. By contrast, official UEB 7 \
+             (2024 UEB PDF p.103, printed p.75) defines its prose comma as `⠂`, and UEB 6.2.1 \
+             (PDF p.94, printed p.66) retains `⠂` inside attached numeric forms such as \
+             `3,500`. Those two surfaces are negative controls and are excluded by this gate.\n\n\
+             Before any engine change, the cohort has {} candidates / {} exact / {} mismatch. \
+             Existing mismatch primaries remain {} `pending_rule_review`, {} `corpus_suspect`, \
+             {} `comparison_method`, and {} `unsupported_character_review`. The \
+             occurrence-specific locator encodes the real prefix immediately before each comma \
+             and claims only its next emitted cell: {}/{} evaluable mismatches localize there, \
+             including {} `{korean_to_ueb}` and {} `{ueb_to_korean}`. Across all pending cases, \
+             the raw-to-residual counts after adding this cohort are {} -> {} for the target and \
+             {} -> {} for the reverse. No primary class is changed and no implementation result \
+             is inferred from the reference outputs at this diagnostic checkpoint.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated,
+            localized_count(korean_to_ueb),
+            localized_count(ueb_to_korean),
+            raw_count(korean_to_ueb),
+            residual_count(korean_to_ueb),
+            raw_count(ueb_to_korean),
+            residual_count(ueb_to_korean),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(UPPERCASE_ROMAN_HYPHEN_DIGITS)
     {
         let pending = stats
@@ -6685,6 +6842,36 @@ mod tests {
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::numeric_list("17, 16, 15", vec![", 1", ", 1"])]
+    #[case::attached_rule41_number("9,375명", vec![])]
+    #[case::roman_prose("A, B", vec![])]
+    #[case::non_numeric_right_side("17, sixteen", vec![])]
+    fn detects_only_spaced_commas_between_ascii_digit_runs(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = spaced_comma_between_ascii_digit_run_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn localizes_each_spaced_numeric_list_comma_in_current_output() {
+        let input = "순위는 17, 16, 15이다.";
+        let actual = braillify::encode_to_unicode(input).expect("numeric-list probe must encode");
+        let ranges = spaced_numeric_list_comma_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 2);
+        assert!(
+            ranges
+                .iter()
+                .all(|range| actual.chars().nth(range.start) == Some('⠂'))
+        );
     }
 
     #[rstest::rstest]
