@@ -582,6 +582,7 @@ const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
 const ALLCAPS_ROMAN_RUN_CONTAINING_ST: &str = "allcaps_roman_run_containing_st";
+const ALLCAPS_ROMAN_RUN_CONTAINING_AR: &str = "allcaps_roman_run_containing_ar";
 const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
     "attached_ascii_roman_segments_joined_by_ampersand";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
@@ -950,6 +951,10 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
 
 fn allcaps_roman_runs_containing_st(input: &str) -> Vec<InputSpan> {
     allcaps_roman_runs_containing_pair(input, b"ST")
+}
+
+fn allcaps_roman_runs_containing_ar(input: &str) -> Vec<InputSpan> {
+    allcaps_roman_runs_containing_pair(input, b"AR")
 }
 
 /// Finds complete ASCII-letter sequences joined directly by one or more
@@ -1615,6 +1620,23 @@ fn first_difference_in_allcaps_st_run(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn allcaps_ar_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+    current_engine_signature_ranges(input, actual, &allcaps_roman_runs_containing_ar(input), 0)
+}
+
+fn first_difference_in_allcaps_ar_run(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    allcaps_ar_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn attached_roman_ampersand_boundary_ranges(
     input: &str,
     actual: &str,
@@ -1886,9 +1908,13 @@ fn first_difference_claimed_before_attached_roman_ampersand(item: &EncodedCase) 
     first_difference_claimed_before_allcaps_st(item) || first_difference_in_allcaps_st_run(item)
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_allcaps_ar(item: &EncodedCase) -> bool {
     first_difference_claimed_before_attached_roman_ampersand(item)
         || first_difference_in_attached_roman_ampersand(item)
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_allcaps_ar(item) || first_difference_in_allcaps_ar_run(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -2495,6 +2521,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ALLCAPS_ROMAN_RUN_CONTAINING_AR.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -2675,6 +2705,15 @@ fn analyze(
                 Some(
                     !first_difference_claimed_before_allcaps_st(item)
                         && first_difference_in_allcaps_st_run(item),
+                ),
+                true,
+            ),
+            (
+                ALLCAPS_ROMAN_RUN_CONTAINING_AR,
+                !allcaps_roman_runs_containing_ar(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_allcaps_ar(item)
+                        && first_difference_in_allcaps_ar_run(item),
                 ),
                 true,
             ),
@@ -3905,6 +3944,77 @@ fn markdown(report: &AnalysisReport) -> String {
          not prove a reference correct; it only means that this deterministic contradiction test \
          did not fire.\n",
     );
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ALLCAPS_ROMAN_RUN_CONTAINING_AR)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_transition = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let raw_transition = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let residual_transition = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let target = "U+2801 ⠁ -> U+281C ⠜";
+        let reverse = "U+281C ⠜ -> U+2801 ⠁";
+        text.push_str(&format!(
+            "\n### Uppercase Roman runs containing `AR`\n\n\
+             UEB 10.12.1 (2024 UEB PDF pp.191-192, printed pp.163-164) says not to \
+             use a contraction when letters within an abbreviation or acronym are known to be \
+             pronounced separately, but to use the contraction in case of doubt. Its official \
+             `DAR` example writes separate `a` and `r` cells, while UEB 10.12.2's official \
+             `START` example uses the `ar` groupsign. Both full-encoder controls pass. Thus an \
+             uppercase surface containing `AR` does not itself supply the pronunciation or \
+             lexical meaning needed to select either form.\n\n\
+             The output-localized cohort contains {} candidates, {} exact controls, and {} \
+             mismatches. Existing mismatch primary classes are preserved: {} \
+             `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, and {} \
+             `unsupported_character_review`. Of {} evaluable mismatches, {} have their first \
+             difference inside the detected current-engine run: {} `{target}` and {} \
+             `{reverse}`. Across raw pending transitions and the final residual after localized \
+             cohorts, the target count is {} -> {}; the reverse is {} -> {}. Inputs denoting \
+             separately pronounced initialisms such as corpus `AR`/`ARS` coexist with exact or \
+             officially contracted controls. This is deterministic evidence for a \
+             pronunciation-dependent pending cohort, not an engine rule or primary \
+             reclassification. Representative shard/index samples are retained above.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_transition(target),
+            localized_transition(reverse),
+            raw_transition(target),
+            residual_transition(target),
+            raw_transition(reverse),
+            residual_transition(reverse),
+        ));
+    }
     if let Some(stats) = report
         .pending_rule_review_clusters
         .get(ALLCAPS_ROMAN_RUN_CONTAINING_ST)
@@ -5149,6 +5259,33 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::official_and_corpus_shapes("DAR AR ARS START", vec!["DAR", "AR", "ARS", "START"])]
+    #[case::lowercase("Ar", vec![])]
+    #[case::mixed_case("aR", vec![])]
+    #[case::no_ar("WHO", vec![])]
+    #[case::digit_prefix("1AR", vec![])]
+    #[case::digit_suffix("ARS2", vec![])]
+    fn detects_allcaps_roman_runs_containing_ar(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let actual = allcaps_roman_runs_containing_ar(input)
+            .into_iter()
+            .map(|run| &input[run.start_byte..run.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    /// UEB 10.12.1-10.12.2 supply both outcomes: `DAR` is pronounced as
+    /// separate letters, whereas `START` uses the `ar` groupsign.
+    #[rstest::rstest]
+    #[case::separate_letters("DAR", "⠠⠠⠙⠁⠗")]
+    #[case::contracted_acronym("START", "⠠⠠⠌⠜⠞")]
+    fn full_encoder_preserves_official_ueb_ar_controls(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(braillify::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    #[rstest::rstest]
     #[case::common_initialisms("M&A P&G R&D", vec!["M&A", "P&G", "R&D"])]
     #[case::ueb_examples("AT&T B&B", vec!["AT&T", "B&B"])]
     #[case::multiple_ampersands("A&B&C", vec!["A&B&C"])]
@@ -5416,6 +5553,18 @@ mod tests {
         let input = "통계기구(WSTS)에 따르면";
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = allcaps_st_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::augmented_reality("증강현실(AR)")]
+    #[case::automated_response("자동응답시스템(ARS)")]
+    fn localizes_allcaps_ar_signature_in_complete_output(#[case] input: &str) {
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = allcaps_ar_actual_ranges(input, &actual);
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
