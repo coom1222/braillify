@@ -580,6 +580,8 @@ const ROMAN_RUN_BEFORE_MIDDLE_DOT_BOUNDARY: &str =
     "roman_run_immediately_before_attached_middle_dot_boundary";
 const ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY: &str =
     "attached_ascii_roman_to_korean_script_boundary";
+const KOREAN_MAJORITY_ROMAN_SANDWICH_NON_DOMAIN: &str =
+    "korean_majority_same_token_roman_sandwich_non_domain";
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
@@ -2412,6 +2414,78 @@ fn first_difference_at_attached_ascii_roman_to_korean_boundary(item: &EncodedCas
         .any(|range| range.contains(&first_difference))
 }
 
+/// Mirrors the document-level word-count gate used by rule 39 closely enough
+/// for a corpus scope audit: each whitespace-delimited word contributes its
+/// first ASCII letter or Korean script character.
+fn input_is_english_majority(input: &str) -> bool {
+    let mut english_words = 0usize;
+    let mut korean_words = 0usize;
+    for word in input.split_whitespace() {
+        match word
+            .chars()
+            .find(|ch| ch.is_ascii_alphabetic() || is_korean_script(*ch))
+        {
+            Some(ch) if ch.is_ascii_alphabetic() => english_words += 1,
+            Some(_) => korean_words += 1,
+            None => {}
+        }
+    }
+    english_words >= korean_words.max(1)
+}
+
+/// Scope audit for the engine branch changed after the boundary diagnosis:
+/// Korean-majority input, one whitespace-delimited token, Korean script with
+/// the nearest script character on both sides being ASCII Roman, excluding
+/// the PDF's dot-delimited `www.대통령.kr` structure.
+fn korean_majority_roman_sandwich_non_domain_spans(input: &str) -> Vec<InputSpan> {
+    if input_is_english_majority(input) {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    let mut word_start = 0usize;
+    for word in input.split_inclusive(char::is_whitespace) {
+        let word_body = word.trim_end_matches(char::is_whitespace);
+        let chars = word_body.char_indices().collect::<Vec<_>>();
+        let mut cursor = 0usize;
+        while cursor < chars.len() {
+            if !is_korean_script(chars[cursor].1) {
+                cursor += 1;
+                continue;
+            }
+            let segment_start = cursor;
+            while cursor < chars.len() && is_korean_script(chars[cursor].1) {
+                cursor += 1;
+            }
+            let segment_end = cursor;
+            let left_is_roman = chars[..segment_start].iter().rev().find_map(|(_, ch)| {
+                (ch.is_ascii_alphabetic() || is_korean_script(*ch))
+                    .then_some(ch.is_ascii_alphabetic())
+            }) == Some(true);
+            let right_is_roman = chars[segment_end..].iter().find_map(|(_, ch)| {
+                (ch.is_ascii_alphabetic() || is_korean_script(*ch))
+                    .then_some(ch.is_ascii_alphabetic())
+            }) == Some(true);
+            if !left_is_roman || !right_is_roman {
+                continue;
+            }
+            let korean_start = chars[segment_start].0;
+            let korean_end = chars
+                .get(segment_end)
+                .map_or(word_body.len(), |(byte, _)| *byte);
+            let dot_delimited = word_body[..korean_start].ends_with('.')
+                && word_body[korean_end..].starts_with('.');
+            if !dot_delimited {
+                spans.push(InputSpan {
+                    start_byte: word_start + korean_start,
+                    end_byte: word_start + korean_end,
+                });
+            }
+        }
+        word_start += word.len();
+    }
+    spans
+}
+
 fn record_attached_ascii_roman_to_korean_marker_outcomes(
     stats: &mut PendingRuleReviewClusterStats,
     item: &EncodedCase,
@@ -2447,10 +2521,10 @@ fn record_attached_ascii_roman_to_korean_marker_outcomes(
             .entry(format!("{outcome}:{marker}"))
             .or_insert(0) += 1;
 
-        if outcome != "exact" {
-            continue;
-        }
-        let bucket = stats.samples.entry(format!("exact_{marker}")).or_default();
+        let bucket = stats
+            .samples
+            .entry(format!("{outcome}_{marker}"))
+            .or_default();
         if bucket.len() >= sample_limit
             || bucket
                 .iter()
@@ -2886,6 +2960,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            KOREAN_MAJORITY_ROMAN_SANDWICH_NON_DOMAIN.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3113,6 +3191,13 @@ fn analyze(
                         && first_difference_at_attached_ascii_roman_to_korean_boundary(item),
                 ),
                 true,
+            ),
+            (
+                KOREAN_MAJORITY_ROMAN_SANDWICH_NON_DOMAIN,
+                !korean_majority_roman_sandwich_non_domain_spans(&item.located.case.input)
+                    .is_empty(),
+                None,
+                false,
             ),
             (
                 KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
@@ -3724,6 +3809,11 @@ fn markdown(report: &AnalysisReport) -> String {
          letter run immediately followed by Korean script and localizes only the current mode \
          marker there: either rule 29's final `⠲` or rule 39's opening `⠸⠷`. It deliberately \
          does not infer the dominant language of the sentence from that surface boundary. The \
+         `korean_majority_same_token_roman_sandwich_non_domain` scope audit mirrors the narrower \
+         rule-39 implementation gate: the nearest script characters on both sides of one Korean \
+         segment are ASCII Roman, the input is Korean-majority by first-script word counts, and \
+         the segment is not dot-delimited like the official domain example. It measures change \
+         scope but is not itself an output-localized causal classifier. The \
          `korean_inline_parenthesized_single_arithmetic_operator` gate requires an immediate \
          `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
          traits, it also locates the current engine's emitted structure and counts a mismatch as \
@@ -5070,6 +5160,11 @@ fn markdown(report: &AnalysisReport) -> String {
             .get("exact:rule39_hangul_opening")
             .copied()
             .unwrap_or(0);
+        let mismatch_hangul_opening = stats
+            .actual_output_signature_outcomes
+            .get("mismatch:rule39_hangul_opening")
+            .copied()
+            .unwrap_or(0);
         text.push_str(&format!(
             "\nCurrent attached Roman-to-Korean boundary measurement: {} candidates, {} exact \
              controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
@@ -5088,12 +5183,41 @@ fn markdown(report: &AnalysisReport) -> String {
              boundary belongs to a Korean-main or Roman-main context. Therefore the \
              attached script boundary alone cannot distinguish ordinary Korean prose from an \
              embedded Roman-domain context. Primary classes are preserved and no engine change \
-             is inferred without a narrower input-derived dominance gate.\n",
+             is inferred without a narrower input-derived dominance gate. At diagnostic \
+             checkpoint `57c4608`, this same cohort was 17,693 candidates / 12,724 exact / 4,969 \
+             mismatch, with 268 localized `⠲ -> ⠸`, zero reverse, 10,780 exact rule-29 markers, \
+             and zero exact rule-39 markers. After narrowing the engine by dominance and the PDF \
+             domain shape, it is 12,924 exact / 4,769 mismatch with no localized target or \
+             reverse; corpus-wide exact rises from 67,715 to 68,101 (+386). The remaining \
+             {mismatch_hangul_opening} mismatch with a current rule-39 opening is a list-heavy \
+             Korean sentence whose ASCII-leading brand tokens satisfy the mechanical word-count \
+             majority; its first difference is not localized to this boundary, so it remains a \
+             semantic pending control rather than grounds for another engine branch.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
             stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(KOREAN_MAJORITY_ROMAN_SANDWICH_NON_DOMAIN)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent rule-39 narrowed-scope audit: {} candidates, {} exact controls, {} \
+             mismatches, and {pending} members in the actual `pending_rule_review` subcluster. \
+             This input-derived scope is recorded separately from the direct-boundary \
+             output-localizer; primary classes are unchanged. At the implementation checkpoint, \
+             this conservative first-script-word approximation contains 385 exact cases, \
+             accounting for all but one of the corpus-wide +386 net gain; no localized reverse \
+             transition is observed in the direct-boundary cohort.\n",
+            stats.candidates, stats.exact, stats.mismatch
         ));
     }
     if let Some(stats) = report
@@ -5403,7 +5527,8 @@ fn markdown(report: &AnalysisReport) -> String {
         "| UEB numeric-mode letter classes in Roman identifiers | 5,141/5,141 | 67,012/83,528 | 80.23% | Lowercase `a`-`j` retains grade 1 after digits, capitals use capitalization, and lowercase `k`-`z` needs no extra indicator; numeric-leading Rule-69 units remain separate |\n\
          | UEB complete all-caps segments across hyphen | 5,141/5,141 | 67,138/83,528 | 80.38% | The grade-1 restart is omitted only between a complete uppercase prefix and an uppercase suffix of at least two letters; mixed/single-capital and digit-hyphen controls remain unchanged |\n\
          | Rule-29 consecutive Roman entry idempotence | 5,141/5,141 | 67,442/83,528 | 80.74% | An explicit Roman-entry event is ignored only when final emit state is already inside the same Roman section |\n\
-         | Rules 29/71 complete attached Roman ampersand run | 5,141/5,141 | 67,715/83,528 | 81.07% | Complete ASCII-letter segments joined by `&` retain one Roman section; official `AT&T`, `B&B`, and spaced Korean Rule-71 controls delimit the safe boundary; 273 cases became exact |\n",
+         | Rules 29/71 complete attached Roman ampersand run | 5,141/5,141 | 67,715/83,528 | 81.07% | Complete ASCII-letter segments joined by `&` retain one Roman section; official `AT&T`, `B&B`, and spaced Korean Rule-71 controls delimit the safe boundary; 273 cases became exact |\n\
+         | Rules 29/39 Roman-to-Korean mode ownership | 5,141/5,141 | 68,101/83,528 | 81.53% | Same-token Korean is wrapped only in a Roman-majority document or the official dot-delimited `www.대통령.kr` domain shape; all three rule-39 PDF controls remain exact and 386 corpus cases became exact |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
@@ -6404,7 +6529,11 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::current_rule39_opening("관련 FAA항공정보(NOTAMS)", '⠸', 2)]
+    #[case::rule29_after_korean_majority_narrowing(
+        "이와 관련해서 FAA는 “FAA항공정보(NOTAMS) 업데이트에 관여한다”고 말했다.",
+        '⠲',
+        1
+    )]
     #[case::current_rule29_terminator("종목 e스포츠", '⠲', 1)]
     fn localizes_current_attached_roman_to_korean_marker(
         #[case] input: &str,
@@ -6414,9 +6543,35 @@ mod tests {
         let actual = braillify::encode_to_unicode(input).expect("boundary probe must encode");
         let ranges = attached_ascii_roman_to_korean_actual_ranges(input, &actual);
 
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0].end - ranges[0].start, marker_cells);
-        assert_eq!(actual.chars().nth(ranges[0].start), Some(first_marker));
+        assert!(!ranges.is_empty());
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.end - range.start == marker_cells)
+        );
+        assert!(
+            ranges
+                .iter()
+                .all(|range| actual.chars().nth(range.start) == Some(first_marker))
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::korean_majority_sandwich(
+        "이와 관련해서 FAA는 “FAA항공정보(NOTAMS) 업데이트에 관여한다”고 말했다.",
+        vec!["항공정보"]
+    )]
+    #[case::pdf_domain_control("대통령실의 누리집 주소는 www.대통령.kr이다.", vec![])]
+    #[case::english_majority_pdf_control("What is 김치 in English?", vec![])]
+    fn detects_rule39_narrowed_scope_without_using_reference_output(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = korean_majority_roman_sandwich_non_domain_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 
     #[rstest::rstest]
