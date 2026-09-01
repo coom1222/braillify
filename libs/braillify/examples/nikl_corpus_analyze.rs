@@ -192,6 +192,9 @@ struct AnalysisReport {
     pending_first_difference_transitions_after_localized_cohorts:
         BTreeMap<String, FirstDifferenceTransitionStats>,
     compact_numeric_ascii_suffixes: BTreeMap<String, PendingRuleReviewClusterStats>,
+    grade1_shortform_prefix_surfaces: BTreeMap<String, PendingRuleReviewClusterStats>,
+    grade1_numeric_continuation_surfaces: BTreeMap<String, PendingRuleReviewClusterStats>,
+    grade1_hyphen_continuation_surfaces: BTreeMap<String, PendingRuleReviewClusterStats>,
     overlapping_traits: BTreeMap<String, usize>,
     shards: BTreeMap<String, ShardStats>,
     samples: BTreeMap<String, Vec<Sample>>,
@@ -586,6 +589,12 @@ const DECIMAL_POINT_BETWEEN_DIGITS: &str = "decimal_point_between_ascii_digits";
 const COMPACT_NUMERIC_ASCII_SUFFIX: &str = "compact_numeric_ascii_letter_suffix";
 const RULE69_ASCII_UNIT_BEFORE_TERMINATOR_SKIPPING_SYMBOL: &str =
     "rule69_ascii_unit_before_terminator_skipping_symbol";
+const ALLCAPS_SHORTFORM_PREFIX_COLLISION: &str =
+    "allcaps_roman_run_beginning_with_pure_letter_shortform";
+const ROMAN_UPPERCASE_AFTER_DIGIT: &str =
+    "uppercase_ascii_run_immediately_after_digit_in_roman_sequence";
+const ROMAN_UPPERCASE_AFTER_HYPHEN: &str =
+    "uppercase_ascii_run_immediately_after_hyphen_in_roman_sequence";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
@@ -920,6 +929,137 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
     runs
 }
 
+/// Finds maximal pure-uppercase ASCII letter runs whose beginning is itself a
+/// pure-letter UEB shortform abbreviation. UEB 5.7.2 and 10.9.7-10.9.8 require
+/// grade 1 both for a complete shortform-shaped letters-sequence (`WD`) and for
+/// a longer word beginning with one (`PDS`, `LLM`, `GDP`).
+fn allcaps_shortform_prefix_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start_byte = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+            cursor += 1;
+        }
+        let end_byte = cursor;
+        let run = &input[start_byte..end_byte];
+        // The isolated prefix is current-engine evidence only: no corpus
+        // expected/reference value participates in this candidate gate. For a
+        // pure all-caps letters-sequence, a leading ⠰ is the engine's existing
+        // UEB 5.7.2/10.9.7 shortform-collision decision.
+        let has_shortform_prefix = (2..=run.len()).any(|end| {
+            braillify::encode_to_unicode(&run[..end]).is_ok_and(|encoded| encoded.starts_with('⠰'))
+        });
+        if run.len() >= 2
+            && run.bytes().all(|byte| byte.is_ascii_uppercase())
+            && has_shortform_prefix
+            && input[..start_byte]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !previous.is_ascii_alphanumeric())
+            && input[end_byte..]
+                .chars()
+                .next()
+                .is_none_or(|next| !next.is_ascii_alphanumeric())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    spans
+}
+
+/// Finds maximal ASCII alphanumeric identifiers containing an immediate
+/// digit-to-uppercase transition (`O4O`, `Li2S`, `V2X`). The numeric indicator
+/// itself sets grade-1 mode under UEB 5.6.1, and 5.6.2 does not terminate that
+/// mode at a capital indicator; the cohort measures whether an extra `⠰` is
+/// nevertheless emitted at this exact boundary.
+fn roman_uppercase_after_digit_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphanumeric() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+        let start_byte = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_alphanumeric) {
+            cursor += 1;
+        }
+        let end_byte = cursor;
+        let run = &bytes[start_byte..end_byte];
+        if run.iter().any(u8::is_ascii_alphabetic)
+            && run
+                .windows(2)
+                .any(|pair| pair[0].is_ascii_digit() && pair[1].is_ascii_uppercase())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    spans
+}
+
+/// Finds maximal ASCII Roman identifiers containing a hyphen immediately
+/// followed by an uppercase run (`U-ENTER`, `CD-ROM`). This is independent of
+/// the digit transition above: Korean rule 29 keeps one Roman section around
+/// consecutive Roman text, while UEB 5.6.2 gives a hyphen separate significance
+/// only when terminating numeric grade-1 mode.
+fn roman_uppercase_after_hyphen_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphanumeric() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+        let start_byte = cursor;
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        {
+            cursor += 1;
+        }
+        let end_byte = cursor;
+        let run = &bytes[start_byte..end_byte];
+        if run.iter().any(u8::is_ascii_alphabetic)
+            && run
+                .windows(2)
+                .any(|pair| pair[0] == b'-' && pair[1].is_ascii_uppercase())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    spans
+}
+
 /// Locates each detected run in the full current-engine output by searching
 /// for that run's independently encoded signature. This uses neither the
 /// corpus reference nor a hard-coded braille value.
@@ -983,6 +1123,85 @@ fn korean_context_signature_ranges(
         }
     }
     ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+/// Produces the current signature of a Roman candidate embedded inside one
+/// mixed Korean word. This intentionally complements the space-delimited probe
+/// above: token-level capitalization can add grade 1 to standalone `WD`, while
+/// the residual under review occurs in attached forms such as `한글(WD)`.
+fn mixed_korean_word_signature(run: &str) -> Option<String> {
+    let left = braillify::encode_to_unicode("가").ok()?;
+    let right = braillify::encode_to_unicode("나").ok()?;
+    let probe = braillify::encode_to_unicode(&format!("가{run}나")).ok()?;
+    let probe_cells = probe.chars().collect::<Vec<_>>();
+    let start = left.chars().count();
+    let end = probe_cells.len().checked_sub(right.chars().count())?;
+    Some(probe_cells.get(start..end)?.iter().collect())
+}
+
+fn grade1_cohort_signature_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+    leading_boundary_cells: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = BTreeSet::new();
+    for candidate in spans {
+        let run = &input[candidate.start_byte..candidate.end_byte];
+        for signature in [
+            korean_context_signature(run),
+            mixed_korean_word_signature(run),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            // The neutral Korean probe appends its own current-engine exit cell.
+            // A corpus candidate followed by a closing parenthesis can suppress
+            // that exit under Korean rule 34, so search both the complete probe
+            // and the same current-engine signature without only that generated
+            // trailing boundary. Candidate letters and indicators are untouched.
+            let without_probe_exit = signature
+                .char_indices()
+                .next_back()
+                .map(|(last, _)| signature[..last].to_string());
+            for searchable in [Some(signature), without_probe_exit]
+                .into_iter()
+                .flatten()
+                .filter(|candidate| !candidate.is_empty())
+            {
+                let signature_cells = searchable.chars().count();
+                for (start_byte, _) in actual.match_indices(&searchable) {
+                    let signature_start = actual[..start_byte].chars().count();
+                    ranges.insert((
+                        signature_start.saturating_sub(leading_boundary_cells),
+                        signature_start + signature_cells,
+                    ));
+                }
+            }
+        }
+    }
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+fn first_difference_in_grade1_cohort_spans(item: &EncodedCase, spans: &[InputSpan]) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    let expected_cell = item.located.case.unicode.chars().nth(first_difference);
+    let actual_cell = actual.chars().nth(first_difference);
+    if !matches!(
+        (expected_cell, actual_cell),
+        (Some('\u{2830}'), Some('\u{2820}')) | (Some('\u{2820}'), Some('\u{2830}'))
+    ) {
+        return false;
+    }
+    grade1_cohort_signature_ranges(&item.located.case.input, actual, spans, 1)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
 }
 
 fn allcaps_ou_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
@@ -1142,7 +1361,7 @@ fn first_difference_in_korean_context_signature_spans(
 /// Only output-localized cohorts may claim a first difference. Broad input-only
 /// coexistence traits are intentionally absent: excluding them would hide
 /// unrelated causes merely because a sentence also contains Roman text.
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_by_prior_localized_cohort(item: &EncodedCase) -> bool {
     first_difference_in_allcaps_ou_run(item)
         || first_difference_in_compact_numeric_ascii_suffix(item)
         || first_difference_in_decimal_word(item)
@@ -1164,6 +1383,22 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
             item,
             &uppercase_roman_hyphen_digit_spans(&item.located.case.input),
             1,
+        )
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_by_prior_localized_cohort(item)
+        || first_difference_in_grade1_cohort_spans(
+            item,
+            &allcaps_shortform_prefix_spans(&item.located.case.input),
+        )
+        || first_difference_in_grade1_cohort_spans(
+            item,
+            &roman_uppercase_after_digit_spans(&item.located.case.input),
+        )
+        || first_difference_in_grade1_cohort_spans(
+            item,
+            &roman_uppercase_after_hyphen_spans(&item.located.case.input),
         )
 }
 
@@ -1810,10 +2045,25 @@ fn analyze(
             UPPERCASE_ROMAN_HYPHEN_DIGITS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
+        (
+            ALLCAPS_SHORTFORM_PREFIX_COLLISION.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            ROMAN_UPPERCASE_AFTER_DIGIT.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            ROMAN_UPPERCASE_AFTER_HYPHEN.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
     let mut compact_numeric_ascii_suffixes = BTreeMap::new();
+    let mut grade1_shortform_prefix_surfaces = BTreeMap::new();
+    let mut grade1_numeric_continuation_surfaces = BTreeMap::new();
+    let mut grade1_hyphen_continuation_surfaces = BTreeMap::new();
     let mut exact = 0usize;
 
     for item in &encoded {
@@ -1977,6 +2227,42 @@ fn analyze(
                 )),
                 false,
             ),
+            (
+                ALLCAPS_SHORTFORM_PREFIX_COLLISION,
+                !allcaps_shortform_prefix_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_by_prior_localized_cohort(item)
+                        && first_difference_in_grade1_cohort_spans(
+                            item,
+                            &allcaps_shortform_prefix_spans(&item.located.case.input),
+                        ),
+                ),
+                true,
+            ),
+            (
+                ROMAN_UPPERCASE_AFTER_DIGIT,
+                !roman_uppercase_after_digit_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_by_prior_localized_cohort(item)
+                        && first_difference_in_grade1_cohort_spans(
+                            item,
+                            &roman_uppercase_after_digit_spans(&item.located.case.input),
+                        ),
+                ),
+                true,
+            ),
+            (
+                ROMAN_UPPERCASE_AFTER_HYPHEN,
+                !roman_uppercase_after_hyphen_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_by_prior_localized_cohort(item)
+                        && first_difference_in_grade1_cohort_spans(
+                            item,
+                            &roman_uppercase_after_hyphen_spans(&item.located.case.input),
+                        ),
+                ),
+                true,
+            ),
         ] {
             if !present {
                 continue;
@@ -2013,6 +2299,42 @@ fn analyze(
                 Some(localized),
                 false,
             );
+        }
+
+        for (target, spans) in [
+            (
+                &mut grade1_shortform_prefix_surfaces,
+                allcaps_shortform_prefix_spans(&item.located.case.input),
+            ),
+            (
+                &mut grade1_numeric_continuation_surfaces,
+                roman_uppercase_after_digit_spans(&item.located.case.input),
+            ),
+            (
+                &mut grade1_hyphen_continuation_surfaces,
+                roman_uppercase_after_hyphen_spans(&item.located.case.input),
+            ),
+        ] {
+            let mut surface_spans = BTreeMap::<String, Vec<InputSpan>>::new();
+            for span in spans {
+                surface_spans
+                    .entry(item.located.case.input[span.start_byte..span.end_byte].to_string())
+                    .or_default()
+                    .push(span);
+            }
+            for (surface, matching_spans) in surface_spans {
+                let localized = !first_difference_claimed_by_prior_localized_cohort(item)
+                    && first_difference_in_grade1_cohort_spans(item, &matching_spans);
+                record_structural_cohort_case(
+                    target.entry(surface).or_default(),
+                    item,
+                    &primary_key,
+                    &reason_key,
+                    sample_limit,
+                    Some(localized),
+                    true,
+                );
+            }
         }
 
         let shard = shards.entry(item.located.shard.clone()).or_default();
@@ -2148,6 +2470,9 @@ fn analyze(
         pending_first_difference_cell_transitions,
         pending_first_difference_transitions_after_localized_cohorts,
         compact_numeric_ascii_suffixes,
+        grade1_shortform_prefix_surfaces,
+        grade1_numeric_continuation_surfaces,
+        grade1_hyphen_continuation_surfaces,
         overlapping_traits: traits,
         shards,
         samples,
@@ -2449,6 +2774,138 @@ fn markdown(report: &AnalysisReport) -> String {
             }
         }
     }
+    text.push_str("\n## UEB grade-1 first-difference cohorts\n\n");
+    text.push_str(
+        "These three cohorts are defined by both an input boundary and the sentence's actual \
+         first-difference transition. They therefore do not claim every mismatch merely \
+         coexisting with an ASCII run. Candidate, exact, mismatch, and primary-class counts \
+         remain cross-cutting controls; only the reported target transition is the localized \
+         residual under review. The reverse transition is retained separately rather than \
+         folded into the target.\n\n",
+    );
+    text.push_str(
+        "| Cohort | Candidates | Exact controls | Mismatch | Target localized | Reverse |\n\
+         |---|---:|---:|---:|---:|---:|\n",
+    );
+    for (name, target, reverse) in [
+        (
+            ALLCAPS_SHORTFORM_PREFIX_COLLISION,
+            "U+2830 ⠰ -> U+2820 ⠠",
+            "U+2820 ⠠ -> U+2830 ⠰",
+        ),
+        (
+            ROMAN_UPPERCASE_AFTER_DIGIT,
+            "U+2820 ⠠ -> U+2830 ⠰",
+            "U+2830 ⠰ -> U+2820 ⠠",
+        ),
+        (
+            ROMAN_UPPERCASE_AFTER_HYPHEN,
+            "U+2820 ⠠ -> U+2830 ⠰",
+            "U+2830 ⠰ -> U+2820 ⠠",
+        ),
+    ] {
+        let stats = report
+            .pending_rule_review_clusters
+            .get(name)
+            .expect("registered grade-1 cohort must exist");
+        let target_count = stats
+            .first_difference_in_output_signature_transitions
+            .get(target)
+            .copied()
+            .unwrap_or(0);
+        let reverse_count = stats
+            .first_difference_in_output_signature_transitions
+            .get(reverse)
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "| `{name}` | {} | {} | {} | {target_count} | {reverse_count} |\n",
+            stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    text.push_str(
+        "\n### All-caps shortform prefix at an attached Roman entry\n\n\
+         UEB 2024 rule 5.7.2 requires grade-1 mode when a letters-sequence could \
+         be read as a shortform or as containing one. Rule 10.9.7 covers a \
+         standing-alone shortform-shaped sequence, rule 10.9.8 covers a sequence at \
+         the beginning of a longer word (the PDF example is `LLC`), and rule 5.8.1 \
+         places grade 1 before capitalization. The current standalone ASCII-token \
+         route already supplies that guard for complete shortform-shaped controls \
+         such as `AC`, `CD`, `IMM`, and `AG`; the attached Korean-word/parenthetical \
+         route enters directly at the capital marker and accounts for the localized \
+         `⠰ -> ⠠` signature. This is a routing distinction supported independently \
+         by the PDF, not an expected-output lookup. Longer runs such as `GDP` and \
+         `LLM` are admitted only when a pure-letter shortform occupies the beginning \
+         of the run; a shortform appearing later would require the distinct grade-1 \
+         word rule 10.9.9 and is outside this implementation candidate.\n\n",
+    );
+    text.push_str(
+        "Same-surface controls demonstrate why primary classes must not be changed \
+         by cohort membership:\n\n\
+         | Surface | Candidates | Exact | Mismatch | Target-localized |\n\
+         |---|---:|---:|---:|---:|\n",
+    );
+    for surface in ["AC", "LLM", "CD", "IMM", "AG", "GDP", "WD"] {
+        if let Some(stats) = report.grade1_shortform_prefix_surfaces.get(surface) {
+            let localized = stats
+                .first_difference_in_output_signature_transitions
+                .get("U+2830 ⠰ -> U+2820 ⠠")
+                .copied()
+                .unwrap_or(0);
+            text.push_str(&format!(
+                "| `{surface}` | {} | {} | {} | {localized} |\n",
+                stats.candidates, stats.exact, stats.mismatch
+            ));
+        }
+    }
+    for surface in ["AC", "LLM", "CD"] {
+        let Some(stats) = report.grade1_shortform_prefix_surfaces.get(surface) else {
+            continue;
+        };
+        let exact = stats
+            .samples
+            .get("exact")
+            .and_then(|samples| samples.first());
+        let localized = stats
+            .samples
+            .get("localized_mismatch")
+            .and_then(|samples| samples.first());
+        if let (Some(exact), Some(localized)) = (exact, localized) {
+            text.push_str(&format!(
+                "\n- `{surface}` exact control: `{}` #{} — {}\n\
+                 - `{surface}` localized mismatch: `{}` #{} — {}\n",
+                exact.shard,
+                exact.index,
+                exact.input.chars().take(180).collect::<String>(),
+                localized.shard,
+                localized.index,
+                localized.input.chars().take(180).collect::<String>()
+            ));
+        }
+    }
+    text.push_str(
+        "\n### Uppercase immediately after a digit\n\n\
+         UEB rule 5.6.1 says the numeric indicator establishes grade-1 mode, and \
+         rule 5.6.2 ends that mode at a space, hyphen, dash, or grade-1 terminator; \
+         a capitalization indicator is not a terminator. Korean rule 35 likewise \
+         keeps Roman letters and an adjacent number in one Roman section. The 330 \
+         localized `⠠ -> ⠰` cases therefore identify a separate possible redundant \
+         continuation at the digit-to-capital boundary. This cohort is not merged \
+         with the shortform-prefix route: the one reverse case and the absence of \
+         same-surface exact controls among frequent forms such as `B2B`, `V2X`, \
+         `Li2S`, and `O4O` require an independent state-machine audit before any \
+         engine change.\n\n\
+         ### Uppercase immediately after a hyphen\n\n\
+         UEB rule 5.7.2 prints `CD-ROM` with one grade-1 indicator before `CD` and \
+         no second grade-1 indicator after the hyphen. Korean rule 29 similarly \
+         uses one Roman span for consecutive Roman text. The 312 localized \
+         `⠠ -> ⠰` cases are therefore tracked as a distinct hyphen-continuation \
+         candidate. The three reverse cases, only 31 exact controls in the broad \
+         cohort, and surfaces whose first difference lies elsewhere remain \
+         controls. This route is judged separately from digit-hyphen forms such as \
+         `F-35`, which this detector excludes, and separately from the shortform \
+         guard that legitimately precedes `CD` in `CD-ROM`.\n\n",
+    );
     text.push_str(
         "\nThis shape is not an engine implementation premise. The 2024 PDF's math rule 6 \
          defines parentheses and grouping parentheses, rule 11 defines mathematical-expression \
@@ -3621,6 +4078,73 @@ mod tests {
             .map(|run| &input[run.start_byte..run.end_byte])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::whole_shortform("가(WD) 나", vec!["WD"])]
+    #[case::longer_prefixes("PDS LLM GDP", vec!["PDS", "LLM", "GDP"])]
+    #[case::ueb_examples("ALT NEC LLC", vec!["ALT", "NEC", "LLC"])]
+    #[case::noncolliding_controls("US KBS MCH", vec![])]
+    #[case::alphanumeric_excluded("O4O Li2S V2X", vec![])]
+    fn detects_allcaps_shortform_prefix_collisions(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = allcaps_shortform_prefix_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::mixed_identifiers("O4O Li2S V2X", vec!["O4O", "Li2S", "V2X"])]
+    #[case::multiple_boundaries("A1B2C", vec!["A1B2C"])]
+    #[case::lowercase_after_digit("240mg", vec![])]
+    #[case::hyphenated_identifier("U-ENTER", vec![])]
+    fn detects_uppercase_after_digit_in_roman_sequence(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_uppercase_after_digit_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::uppercase_segments("U-ENTER CD-ROM", vec!["U-ENTER", "CD-ROM"])]
+    #[case::digit_after_hyphen("F-35", vec![])]
+    #[case::lowercase_after_hyphen("U-enter", vec![])]
+    fn detects_uppercase_after_hyphen_in_roman_sequence(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_uppercase_after_hyphen_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::shortform_prefix("가(WD) 나", allcaps_shortform_prefix_spans("가(WD) 나"))]
+    #[case::numeric_continuation("가(Li2S) 나", roman_uppercase_after_digit_spans("가(Li2S) 나"))]
+    #[case::hyphen_continuation(
+        "가(U-ENTER) 나",
+        roman_uppercase_after_hyphen_spans("가(U-ENTER) 나")
+    )]
+    fn locates_grade1_cohort_signature_in_korean_context(
+        #[case] input: &str,
+        #[case] spans: Vec<InputSpan>,
+    ) {
+        let actual = braillify::encode_to_unicode(input).expect("grade-1 probe must encode");
+        let ranges = grade1_cohort_signature_ranges(input, &actual, &spans, 1);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
     }
 
     #[test]
