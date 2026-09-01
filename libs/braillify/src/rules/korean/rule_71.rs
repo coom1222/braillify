@@ -54,6 +54,13 @@ fn is_attached_roman_ampersand(ctx: &RuleContext) -> bool {
     crate::english_logic::is_attached_ascii_roman_ampersand(ctx.word_chars, ctx.index)
 }
 
+fn begins_attached_roman_segment(ctx: &RuleContext) -> bool {
+    crate::english_logic::is_ampersand_before_attached_ascii_roman_segment(
+        ctx.word_chars,
+        ctx.index,
+    )
+}
+
 pub fn is_rule_71_symbol(c: char) -> bool {
     MAPPINGS.iter().any(|(candidate, _)| *candidate == c)
 }
@@ -109,6 +116,24 @@ impl BrailleRule for Rule71 {
 
         let mut encoded = Vec::new();
         if should_wrap_information_symbol(ctx)
+            && ctx.current_char() == '&'
+            && begins_attached_roman_segment(ctx)
+        {
+            // Korean rules 29/32/71 and UEB 3.1.1 `&c`: the ambiguous
+            // ampersand opens the Roman section, but the attached ASCII-letter
+            // segment owns its eventual terminator. Do not close and re-enter
+            // between the two printed-adjacent items.
+            if !ctx.state.is_english {
+                if ctx.state.english_dominant_no_indicator {
+                    ctx.state.is_english = true;
+                    ctx.state.needs_english_continuation = false;
+                    ctx.state.roman_number_chain = false;
+                } else {
+                    crate::rules::roman_mode::enter_english(ctx.state, ctx.result);
+                }
+            }
+            encoded = encode_unicode_cells(unicode);
+        } else if should_wrap_information_symbol(ctx)
             && matches!(ctx.current_char(), '&' | '¶' | '©' | '®' | '™')
             && !is_attached_roman_ampersand(ctx)
         {
@@ -194,6 +219,21 @@ mod tests {
 
         assert!(matches!(outcome, RuleResult::Consumed));
         assert_eq!(ctx.result.as_slice(), encode_unicode_cells("⠈⠯"));
+    }
+
+    /// UEB 3.1.1's official `&c` surface exercises the Korean Rule-71 wrapper
+    /// state directly: the Roman indicator precedes `&`, and the section stays
+    /// open for the attached `c` rather than emitting a terminator/re-entry.
+    #[test]
+    fn one_sided_official_ampersand_opens_and_keeps_roman_section() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("&c", true);
+        let mut ctx = owned.ctx_at(0);
+
+        let outcome = Rule71.apply(&mut ctx).unwrap();
+
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert_eq!(ctx.result.as_slice(), encode_unicode_cells("⠴⠈⠯"));
+        assert!(ctx.state.is_english);
     }
 
     /// Full-encoder controls reproduce the two UEB 3.1.1 examples exactly.

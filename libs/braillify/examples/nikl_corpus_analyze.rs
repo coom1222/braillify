@@ -1991,17 +1991,22 @@ fn first_difference_in_attached_roman_ampersand(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
-/// Locates the current Rule-71 terminator emitted immediately after an
-/// ampersand whose right-hand ASCII Roman segment is attached. The real input
-/// prefix through `&` is encoded independently, so another ampersand in the
-/// sentence cannot satisfy this output-position audit.
+/// Locates the Rule-71/29 boundary around an ampersand whose right-hand ASCII
+/// Roman segment is attached. The real input prefix before each occurrence
+/// anchors the current complete entry signature; the independently encoded
+/// prefix through `&` additionally retains the pre-fix terminator location.
+/// Another ampersand in the sentence therefore cannot satisfy this audit.
 fn ampersand_before_ascii_roman_boundary_ranges(
     input: &str,
     actual: &str,
 ) -> Vec<std::ops::Range<usize>> {
     let actual_cells = actual.chars().collect::<Vec<_>>();
-    let mut ranges = BTreeSet::new();
-    for span in ampersand_before_attached_ascii_roman_spans(input) {
+    let spans = ampersand_before_attached_ascii_roman_spans(input);
+    let mut ranges = current_engine_input_entry_ranges(input, actual, &spans, 7)
+        .into_iter()
+        .map(|range| (range.start, range.end))
+        .collect::<BTreeSet<_>>();
+    for span in spans {
         let ampersand_end = span.start_byte + 1;
         let Ok(prefix) = braillify::encode_to_unicode(&input[..ampersand_end]) else {
             continue;
@@ -4184,8 +4189,8 @@ fn markdown(report: &AnalysisReport) -> String {
          UEB `&c` boundary: `&` is followed by a complete ASCII-letter segment, while an ASCII \
          alphanumeric or another ampersand immediately before it and a digit continuation after \
          it are excluded. Its output range is anchored by independently encoding the real input \
-         prefix through `&`, then includes only the current Rule-71 exit and following Roman \
-         re-entry cells. The \
+         prefix before each occurrence, then includes only the current Rule-71/29 entry \
+         boundary; a second pre-fix anchor through `&` retains the former exit location. The \
          `consecutive_ascii_roman_words_whitespace_boundary` gate requires two adjacent \
          ASCII-letter words separated only by whitespace. For each boundary it independently \
          encodes the real input prefix ending after the first word, then localizes only the \
@@ -5193,10 +5198,10 @@ fn markdown(report: &AnalysisReport) -> String {
                 .map(|transition| transition.cases)
                 .unwrap_or(0)
         };
-        let cap_target = "U+2820 ⠠ -> U+2832 ⠲";
-        let entry_target = "U+2834 ⠴ -> U+2832 ⠲";
-        let cap_reverse = "U+2832 ⠲ -> U+2820 ⠠";
-        let entry_reverse = "U+2832 ⠲ -> U+2834 ⠴";
+        let omitted_indicator = "U+2808 ⠈ -> U+2834 ⠴";
+        let omitted_indicator_reverse = "U+2834 ⠴ -> U+2808 ⠈";
+        let duplicate_entry = "U+2834 ⠴ -> U+2820 ⠠";
+        let duplicate_entry_reverse = "U+2820 ⠠ -> U+2834 ⠴";
         text.push_str(&format!(
             "\n### Ampersand before an attached ASCII Roman segment\n\n\
              This is the residual boundary not covered by the implemented `A&B` gate. Official \
@@ -5208,21 +5213,33 @@ fn markdown(report: &AnalysisReport) -> String {
              rules 29 and 32 require one Roman section for consecutive Roman material and UEB \
              transcription inside that section. The spaced Korean control `종이접기 & \
              클레이아트` remains an independently closed Rule-71 symbol.\n\n\
-             The baseline input/output cohort contains {} candidates, {} corpus exact controls, \
-             and {} mismatches. Existing mismatch primary classes remain unchanged: {} \
+             The diagnostic checkpoint baseline was 30 candidates / 0 corpus exact / 30 \
+             mismatch, preserving 26 `pending_rule_review` and 4 `corpus_suspect` primary \
+             classes. Its then-current Rule-71 exit localizer found 16/30 first differences: 15 \
+             `U+2820 ⠠ -> U+2832 ⠲` and 1 `U+2834 ⠴ -> U+2832 ⠲`; both localized reverses \
+             were zero. The official full-encoder `&c`, `AT&T`, and `B&B` examples were the \
+             positive controls, and the spaced Korean Rule-71 example was the negative boundary \
+             control.\n\n\
+             The implemented rule is limited to an ampersand followed by a complete attached \
+             ASCII-letter segment, with no left ASCII alphanumeric or adjacent ampersand and no \
+             trailing digit continuation. Rule 71 opens one Roman section before `&`; rule 29 \
+             now leaves it open for the attached letters. It does not name a corpus input or \
+             inspect a reference. After the change, the cohort has {} candidates, {} exact and \
+             {} mismatch; the corpus-wide exact total rises by the same 12 cases, from 68,175 to \
+             68,187, so no exact regression occurs inside or outside this gate. The 16 former \
+             exit/re-entry transitions disappear; 12 become exact and 4 remain mismatches at a \
+             different PDF-conflicting boundary. Existing mismatch primary classes remain {} \
              `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, and {} \
-             `unsupported_character_review`. Of {} evaluable mismatches, {} have the first \
-             difference inside the current Rule-71 exit and following Roman re-entry: {} \
-             `{cap_target}` and {} `{entry_target}`. Their raw-to-residual counts after all \
-             localized cohorts are {} -> {} and {} -> {}; localized reverse counts are zero, \
-             while the raw-to-residual maps for `{cap_reverse}` and `{entry_reverse}` are {} -> \
-             {} and {} -> {}. Representative localized samples include `&TEAM`, \
-             `드림&Dream`, and `한국&K리츠`, with shard/index retained above.\n\n\
-             There is no exact NIKL member in this narrow cohort, so the corpus alone cannot \
-             authorize a change. The official full-encoder `&c`, `AT&T`, and `B&B` examples are \
-             the positive controls; the spaced Korean Rule-71 example is the negative boundary \
-             control. This checkpoint records only the baseline and does not yet change the \
-             engine or any primary classification.\n",
+             `unsupported_character_review`.\n\n\
+             Of {} current evaluable mismatches, {} are localized to the occurrence-specific \
+             entry signature: {} `{omitted_indicator}` where a parenthesized `&TEAM` reference \
+             omits Rule 71's required Roman indicator, and {} `{duplicate_entry}` where a \
+             `드림&Dream` reference inserts another Roman indicator inside the same continuous \
+             section. Their raw-to-residual counts are {} -> {} and {} -> {}; the corresponding \
+             reverse maps are {} -> {} and {} -> {}. These four cases remain conservative \
+             corpus/PDF-reference review rather than widening or undoing the rule. Exact samples \
+             such as `&TEAM`, `과학&ICT`, and `한국&K리츠`, with shard/index above, are current \
+             controls. Primary classifications are never changed by this cohort.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -5232,16 +5249,16 @@ fn markdown(report: &AnalysisReport) -> String {
             primary_count("unsupported_character_review"),
             stats.output_signature_mismatches_evaluated,
             stats.first_difference_in_output_signature,
-            localized_count(cap_target),
-            localized_count(entry_target),
-            raw_count(cap_target),
-            residual_count(cap_target),
-            raw_count(entry_target),
-            residual_count(entry_target),
-            raw_count(cap_reverse),
-            residual_count(cap_reverse),
-            raw_count(entry_reverse),
-            residual_count(entry_reverse),
+            localized_count(omitted_indicator),
+            localized_count(duplicate_entry),
+            raw_count(omitted_indicator),
+            residual_count(omitted_indicator),
+            raw_count(duplicate_entry),
+            residual_count(duplicate_entry),
+            raw_count(omitted_indicator_reverse),
+            residual_count(omitted_indicator_reverse),
+            raw_count(duplicate_entry_reverse),
+            residual_count(duplicate_entry_reverse),
         ));
     }
     if let Some(stats) = report
@@ -6085,7 +6102,8 @@ fn markdown(report: &AnalysisReport) -> String {
          | Rule-29 consecutive Roman entry idempotence | 5,141/5,141 | 67,442/83,528 | 80.74% | An explicit Roman-entry event is ignored only when final emit state is already inside the same Roman section |\n\
          | Rules 29/71 complete attached Roman ampersand run | 5,141/5,141 | 67,715/83,528 | 81.07% | Complete ASCII-letter segments joined by `&` retain one Roman section; official `AT&T`, `B&B`, and spaced Korean Rule-71 controls delimit the safe boundary; 273 cases became exact |\n\
          | Rules 29/39 Roman-to-Korean mode ownership | 5,141/5,141 | 68,101/83,528 | 81.53% | Same-token Korean is wrapped only in a Roman-majority document or the official dot-delimited `www.대통령.kr` domain shape; all three rule-39 PDF controls remain exact and 386 corpus cases became exact |\n\
-         | Rules 29/34 multiword Roman parenthetical continuity | 5,141/5,141 | 68,175/83,528 | 81.62% | A backwards-verified, closed letter-and-space Roman parenthetical tail stays on the prose route; function calls, digits, operators, nested brackets, and punctuation-separated forms remain outside; 74 cases became exact |\n",
+         | Rules 29/34 multiword Roman parenthetical continuity | 5,141/5,141 | 68,175/83,528 | 81.62% | A backwards-verified, closed letter-and-space Roman parenthetical tail stays on the prose route; function calls, digits, operators, nested brackets, and punctuation-separated forms remain outside; 74 cases became exact |\n\
+         | Rules 29/32/71 ampersand before attached Roman segment | 5,141/5,141 | 68,187/83,528 | 81.63% | Official UEB `&c`, `AT&T`, and `B&B` keep one Roman section across attached `&`; the spaced Korean Rule-71 example, left ASCII alphanumerics, repeated ampersands, and trailing digits delimit the gate; 12 cases became exact |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
@@ -6676,8 +6694,9 @@ mod tests {
         let actual = braillify::encode_to_unicode(input).expect("ampersand probe must encode");
         let ranges = ampersand_before_ascii_roman_boundary_ranges(input, &actual);
 
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠲'));
+        assert!(ranges.iter().any(|range| {
+            actual.chars().skip(range.start).take(3).collect::<String>() == "⠴⠈⠯"
+        }));
     }
 
     #[rstest::rstest]

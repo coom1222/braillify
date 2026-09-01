@@ -117,6 +117,39 @@ pub(crate) fn is_attached_ascii_roman_ampersand(word_chars: &[char], index: usiz
         && (end == word_chars.len() || !word_chars[end].is_ascii_alphanumeric())
 }
 
+/// Returns whether `index` is the one-sided ampersand at the beginning of a
+/// complete attached ASCII-letter segment. UEB 3.1.1 prints `&c` without a
+/// boundary between the ampersand and `c`. A left ASCII alphanumeric, another
+/// ampersand, or a trailing digit is excluded so the existing two-sided
+/// `A&B` rule and Roman/number identifiers retain their own ownership.
+pub(crate) fn is_ampersand_before_attached_ascii_roman_segment(
+    word_chars: &[char],
+    index: usize,
+) -> bool {
+    if word_chars.get(index) != Some(&'&')
+        || !word_chars
+            .get(index + 1)
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        || index
+            .checked_sub(1)
+            .and_then(|i| word_chars.get(i))
+            .is_some_and(|previous| previous.is_ascii_alphanumeric() || *previous == '&')
+    {
+        return false;
+    }
+
+    let mut end = index + 1;
+    while word_chars
+        .get(end)
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+    {
+        end += 1;
+    }
+    word_chars
+        .get(end)
+        .is_none_or(|next| !next.is_ascii_alphanumeric())
+}
+
 fn is_digital_notation_symbol(symbol: char) -> bool {
     matches!(symbol, '/' | '@' | '#' | '.' | '_' | ':')
 }
@@ -418,6 +451,23 @@ mod tests {
         let index = word.iter().position(|ch| *ch == '&').unwrap();
         assert_eq!(
             should_render_symbol_as_english(english_indicator, true, &[], '&', &word, index, &[],),
+            expected,
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::official_and_c("&c", true)]
+    #[case::official_at_and_t("AT&T", false)]
+    #[case::official_b_and_b("B&B", false)]
+    #[case::official_spaced("Marks & Spencer", false)]
+    fn one_sided_ampersand_requires_complete_right_roman_segment(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        let word = input.chars().collect::<Vec<_>>();
+        let index = word.iter().rposition(|ch| *ch == '&').unwrap();
+        assert_eq!(
+            is_ampersand_before_attached_ascii_roman_segment(&word, index),
             expected,
         );
     }
