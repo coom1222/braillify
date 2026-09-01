@@ -600,6 +600,7 @@ const CAPITALS_WORD_NONLETTER_CHANGE_SCOPE: &str =
     "capitals_word_mode_previously_spanning_nonletter_scope";
 const AMPERSAND_BEFORE_ATTACHED_ASCII_ROMAN_SEGMENT: &str =
     "ampersand_before_attached_ascii_roman_segment";
+const ASCII_APOSTROPHE_BETWEEN_ASCII_LETTERS: &str = "ascii_apostrophe_between_ascii_letter_runs";
 const SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS: &str = "spaced_comma_between_ascii_digit_runs";
 const ASCII_ROMAN_COMMA_BEFORE_DIGIT_KOREAN_TOKEN: &str =
     "ascii_roman_tail_comma_before_digit_korean_token";
@@ -1143,6 +1144,42 @@ fn uppercase_ascii_ampersand_spans(input: &str) -> Vec<InputSpan> {
                 && input[span.start_byte..span.end_byte]
                     .split('&')
                     .all(|segment| segment.bytes().all(|byte| byte.is_ascii_uppercase()))
+        })
+        .collect()
+}
+
+/// Finds a straight ASCII apostrophe joining non-empty ASCII-letter runs.
+/// UEB 8.4.2 prints this structure inside `O'Hara`, `DON'T`, and `THAT'S`;
+/// detached quotation marks, measurement marks, and Korean quote punctuation
+/// are excluded by the immediate-letter requirement.
+fn ascii_internal_apostrophe_spans(input: &str) -> Vec<InputSpan> {
+    let indexed = input.char_indices().collect::<Vec<_>>();
+    let mut spans = BTreeSet::new();
+    for index in 1..indexed.len().saturating_sub(1) {
+        if indexed[index].1 != '\''
+            || !indexed[index - 1].1.is_ascii_alphabetic()
+            || !indexed[index + 1].1.is_ascii_alphabetic()
+        {
+            continue;
+        }
+        let mut start = index - 1;
+        while start > 0 && indexed[start - 1].1.is_ascii_alphabetic() {
+            start -= 1;
+        }
+        let mut end = index + 2;
+        while end < indexed.len() && indexed[end].1.is_ascii_alphabetic() {
+            end += 1;
+        }
+        spans.insert((
+            indexed[start].0,
+            indexed.get(end).map_or(input.len(), |(byte, _)| *byte),
+        ));
+    }
+    spans
+        .into_iter()
+        .map(|(start_byte, end_byte)| InputSpan {
+            start_byte,
+            end_byte,
         })
         .collect()
 }
@@ -2560,6 +2597,37 @@ fn first_difference_in_korean_context_signature_spans(
     .any(|range| range.contains(&first_difference))
 }
 
+fn first_difference_at_ascii_internal_apostrophe(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    let actual_len = actual.chars().count();
+    ascii_internal_apostrophe_spans(&item.located.case.input)
+        .into_iter()
+        .filter_map(|span| {
+            let relative = item.located.case.input[span.start_byte..span.end_byte].find('\'')?;
+            let apostrophe_byte = span.start_byte + relative;
+            let prefix =
+                braillify::encode_to_unicode(&item.located.case.input[..apostrophe_byte]).ok()?;
+            let prefix_len = prefix.chars().count();
+            let common = prefix
+                .chars()
+                .zip(actual.chars())
+                .take_while(|(left, right)| left == right)
+                .count();
+            // Encoding a real prefix in isolation may append only its final
+            // Roman boundary. Reject anchors that diverge earlier, because an
+            // unrelated prior mismatch must not be attributed here.
+            (prefix_len.saturating_sub(common) <= 2)
+                .then(|| common..std::cmp::min(common + 5, actual_len))
+        })
+        .any(|range| range.contains(&first_difference))
+}
+
 /// Only output-localized cohorts may claim a first difference. Broad input-only
 /// coexistence traits are intentionally absent: excluding them would hide
 /// unrelated causes merely because a sentence also contains Roman text.
@@ -2572,6 +2640,7 @@ fn first_difference_claimed_by_prior_localized_cohort(item: &EncodedCase) -> boo
         || first_difference_in_tight_triangle(item)
         || first_difference_at_roman_middle_dot_boundary(item)
         || first_difference_in_uppercase_ascii_ampersand(item)
+        || first_difference_at_ascii_internal_apostrophe(item)
         || first_difference_in_signature_spans(
             item,
             &single_capital_parenthesized_digit_spans(&item.located.case.input),
@@ -3648,6 +3717,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ASCII_APOSTROPHE_BETWEEN_ASCII_LETTERS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3914,6 +3987,12 @@ fn analyze(
                     !first_difference_claimed_before_allcaps_ar(item)
                         && first_difference_after_ampersand_before_ascii_roman(item),
                 ),
+                true,
+            ),
+            (
+                ASCII_APOSTROPHE_BETWEEN_ASCII_LETTERS,
+                !ascii_internal_apostrophe_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_at_ascii_internal_apostrophe(item)),
                 true,
             ),
             (
@@ -4645,6 +4724,11 @@ fn markdown(report: &AnalysisReport) -> String {
          it are excluded. Its output range is anchored by independently encoding the real input \
          prefix before each occurrence, then includes only the current Rule-71/29 entry \
          boundary; a second pre-fix anchor through `&` retains the former exit location. The \
+         `ascii_apostrophe_between_ascii_letter_runs` gate requires a straight apostrophe with \
+         an ASCII letter immediately on both sides and expands only across those two letter \
+         runs. It excludes detached quotation marks and numeric measurement marks, then locates \
+         the complete current mixed-Korean output signature. UEB 8.4.2 directly supplies \
+         `O'Hara`, `DON'T`, and `THAT'S` as controls. The \
          `consecutive_ascii_roman_words_whitespace_boundary` gate requires two adjacent \
          ASCII-letter words separated only by whitespace. For each boundary it independently \
          encodes the real input prefix ending after the first word, then localizes only the \
@@ -5788,6 +5872,28 @@ fn markdown(report: &AnalysisReport) -> String {
             residual_count(omitted_indicator_reverse),
             raw_count(duplicate_entry_reverse),
             residual_count(duplicate_entry_reverse),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ASCII_APOSTROPHE_BETWEEN_ASCII_LETTERS)
+    {
+        text.push_str(&format!(
+            "\n### ASCII apostrophe between Roman letter runs\n\n\
+             This output-localized cohort requires a straight ASCII apostrophe with an ASCII \
+             letter immediately on both sides. UEB 8.4.2 (2024 UEB PDF pp.118-119, printed \
+             pp.90-91) directly prints `O'Hara`, `DON'T`, and `THAT'S` with the apostrophe cell \
+             inside the same Roman word; capitals-word mode may end at the apostrophe, but the \
+             Roman section itself does not. Detached quotation marks, Korean single quotation \
+             marks, and digit-adjacent measurement signs are excluded. The current diagnostic \
+             has {} candidates, {} exact controls, and {} mismatches. Of {} evaluable mismatches, \
+             {} place their first difference inside the independently encoded mixed-Korean \
+             signature. Membership preserves every primary class.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
         ));
     }
     if let Some(stats) = report
@@ -7456,6 +7562,24 @@ mod tests {
         #[case] expected: Vec<&str>,
     ) {
         let actual = ampersand_before_attached_ascii_roman_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::official_name("O'Hara", vec!["O'Hara"])]
+    #[case::official_contraction("DON'T", vec!["DON'T"])]
+    #[case::official_possessive("THAT'S", vec!["THAT'S"])]
+    #[case::detached_quotes("rock 'n' roll", vec![])]
+    #[case::measurement_mark("6' 2", vec![])]
+    #[case::korean_single_quotes("‘가’", vec![])]
+    fn detects_ascii_apostrophe_between_ascii_letter_runs(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = ascii_internal_apostrophe_spans(input)
             .into_iter()
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
