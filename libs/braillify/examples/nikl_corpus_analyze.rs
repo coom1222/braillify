@@ -3184,13 +3184,11 @@ fn korean_majority_roman_sandwich_non_domain_spans(input: &str) -> Vec<InputSpan
 fn record_attached_ascii_roman_to_korean_marker_outcomes(
     stats: &mut PendingRuleReviewClusterStats,
     item: &EncodedCase,
+    actual: &str,
     primary_key: &str,
     reason_key: &str,
     sample_limit: usize,
 ) {
-    let Ok(actual) = &item.actual else {
-        return;
-    };
     let ranges = attached_ascii_roman_to_korean_actual_ranges(&item.located.case.input, actual);
     let actual_cells = actual.chars().collect::<Vec<_>>();
     let outcome = if primary_key == "exact" {
@@ -4278,10 +4276,13 @@ fn analyze(
                 localized_first_difference,
                 localized_samples,
             );
-            if cluster == ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY {
+            if cluster == ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY
+                && let Ok(actual) = &item.actual
+            {
                 record_attached_ascii_roman_to_korean_marker_outcomes(
                     stats,
                     item,
+                    actual,
                     &primary_key,
                     &reason_key,
                     sample_limit,
@@ -8417,36 +8418,6 @@ mod tests {
         let ranges = attached_korean_auxiliary_itda_actual_ranges(input, &actual);
 
         assert!(ranges.is_empty());
-    }
-
-    #[test]
-    fn skips_attached_roman_boundary_outcomes_when_encoding_failed() {
-        let item = EncodedCase {
-            located: LocatedCase {
-                shard: "synthetic.json".to_string(),
-                index: 1,
-                case: CorpusCase {
-                    input: "AI기술".to_string(),
-                    unicode: String::new(),
-                },
-            },
-            actual: Err("synthetic encoding failure".to_string()),
-            nfc_actual: None,
-            nfkc_actual: None,
-            singleton_unsupported_characters: Vec::new(),
-        };
-        let mut stats = PendingRuleReviewClusterStats::default();
-
-        record_attached_ascii_roman_to_korean_marker_outcomes(
-            &mut stats,
-            &item,
-            "encoded_mismatch_pending_rule_review",
-            "pending_rule_review",
-            10,
-        );
-
-        assert!(stats.actual_output_signature_outcomes.is_empty());
-        assert!(stats.samples.is_empty());
     }
 
     #[test]

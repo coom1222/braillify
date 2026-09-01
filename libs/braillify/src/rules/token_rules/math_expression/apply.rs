@@ -192,7 +192,7 @@ fn is_multiword_closed_roman_parenthetical_tail(
                     {
                         return false;
                     }
-                    return !before.chars().any(|ch| matches!(ch, '(' | ')'));
+                    return !before.contains('(') && !before.contains(')');
                 }
                 if previous_text.chars().all(|ch| ch.is_ascii_alphabetic()) {
                     cursor = i.checked_sub(1);

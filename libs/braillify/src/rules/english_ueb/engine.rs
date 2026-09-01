@@ -218,14 +218,10 @@ impl EnglishUebEngine {
         let lower_word: String = lower.iter().collect();
         if !standing_alone && super::rule_10_5::wordsign(&lower_word).is_some() {
             if !suppress_caps {
-                match classify_caps(chars)? {
-                    Caps::None => {}
-                    Caps::Single => out.push(CAPITAL),
-                    Caps::Word => {
-                        out.push(CAPITAL);
-                        out.push(CAPITAL);
-                    }
-                }
+                let caps = classify_caps(chars)?;
+                let indicator_count =
+                    usize::from(caps != Caps::None) + usize::from(caps == Caps::Word);
+                out.extend(std::iter::repeat_n(CAPITAL, indicator_count));
             }
             out.extend(super::rule_10_9::encode_korean_groupsigns(
                 &lower,
