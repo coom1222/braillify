@@ -583,6 +583,8 @@ const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_befo
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
 const ALLCAPS_ROMAN_RUN_CONTAINING_ST: &str = "allcaps_roman_run_containing_st";
 const ALLCAPS_ROMAN_RUN_CONTAINING_AR: &str = "allcaps_roman_run_containing_ar";
+const ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE: &str =
+    "roman_run_after_whitespace_following_closed_roman_enclosure";
 const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
     "attached_ascii_roman_segments_joined_by_ampersand";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
@@ -955,6 +957,99 @@ fn allcaps_roman_runs_containing_st(input: &str) -> Vec<InputSpan> {
 
 fn allcaps_roman_runs_containing_ar(input: &str) -> Vec<InputSpan> {
     allcaps_roman_runs_containing_pair(input, b"AR")
+}
+
+fn enclosure_contains_ascii_roman(input: &str, closer_byte: usize, closer: char) -> bool {
+    let (opener, search_end) = match closer {
+        ')' => ('(', closer_byte),
+        '’' => ('‘', closer_byte),
+        '”' => ('“', closer_byte),
+        _ => return false,
+    };
+    let Some(open_byte) = input[..search_end].rfind(opener) else {
+        return false;
+    };
+    input[open_byte + opener.len_utf8()..closer_byte]
+        .chars()
+        .any(|ch| ch.is_ascii_alphabetic())
+}
+
+/// Finds an ASCII-letter run after whitespace that follows a closed
+/// Roman-containing parenthesis or curly-quoted span. The
+/// optional comma/colon/semicolon and opening quote model corpus punctuation;
+/// no output or reference cells participate in this input gate.
+fn roman_run_after_closed_roman_enclosure_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start_byte = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+        }
+        let end_byte = cursor;
+        if input[start_byte..end_byte].is_empty()
+            || input[..start_byte]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric())
+            || input[end_byte..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+
+        let mut boundary = start_byte;
+        while let Some((offset, ch)) = input[..boundary].char_indices().next_back() {
+            if matches!(ch, '‘' | '“') {
+                boundary = offset;
+            } else {
+                break;
+            }
+        }
+
+        let mut saw_whitespace = false;
+        while let Some((offset, ch)) = input[..boundary].char_indices().next_back() {
+            if ch.is_whitespace() {
+                saw_whitespace = true;
+                boundary = offset;
+            } else {
+                break;
+            }
+        }
+        if !saw_whitespace {
+            continue;
+        }
+
+        while let Some((offset, ch)) = input[..boundary].char_indices().next_back() {
+            if matches!(ch, ',' | ':' | ';') {
+                boundary = offset;
+            } else {
+                break;
+            }
+        }
+        let Some((closer_byte, closer)) = input[..boundary].char_indices().next_back() else {
+            continue;
+        };
+        if enclosure_contains_ascii_roman(input, closer_byte, closer) {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    spans
 }
 
 /// Finds complete ASCII-letter sequences joined directly by one or more
@@ -1637,6 +1732,31 @@ fn first_difference_in_allcaps_ar_run(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn roman_after_closed_enclosure_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    current_engine_signature_ranges(
+        input,
+        actual,
+        &roman_run_after_closed_roman_enclosure_spans(input),
+        1,
+    )
+}
+
+fn first_difference_in_roman_after_closed_enclosure(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    roman_after_closed_enclosure_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn attached_roman_ampersand_boundary_ranges(
     input: &str,
     actual: &str,
@@ -1913,8 +2033,13 @@ fn first_difference_claimed_before_allcaps_ar(item: &EncodedCase) -> bool {
         || first_difference_in_attached_roman_ampersand(item)
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_roman_after_closed_enclosure(item: &EncodedCase) -> bool {
     first_difference_claimed_before_allcaps_ar(item) || first_difference_in_allcaps_ar_run(item)
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_roman_after_closed_enclosure(item)
+        || first_difference_in_roman_after_closed_enclosure(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -2525,6 +2650,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -2714,6 +2843,15 @@ fn analyze(
                 Some(
                     !first_difference_claimed_before_allcaps_ar(item)
                         && first_difference_in_allcaps_ar_run(item),
+                ),
+                true,
+            ),
+            (
+                ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE,
+                !roman_run_after_closed_roman_enclosure_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_roman_after_closed_enclosure(item)
+                        && first_difference_in_roman_after_closed_enclosure(item),
                 ),
                 true,
             ),
@@ -4017,6 +4155,77 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_transition = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let raw_transition = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let residual_transition = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let target = "U+2834 ⠴ -> U+2830 ⠰";
+        let reverse = "U+2830 ⠰ -> U+2834 ⠴";
+        text.push_str(&format!(
+            "\n### Roman run after a closed Roman enclosure\n\n\
+             Korean rule 29 places one Roman indicator/terminator pair around consecutive Roman \
+             items, with `Los Angeles` and `Table of Contents` as its printed multiword examples. \
+             Rule 34 separately omits the Roman terminator when Roman text is enclosed by \
+             quotation marks or parentheses. Neither printed rule states whether a later Roman \
+             run after the enclosure, intervening punctuation, and whitespace is a continuation \
+             of that section or a fresh section. The input gate therefore detects only the \
+             structural boundary; it does not label the later run as semantically new.\n\n\
+             The cohort contains {} candidates, {} exact controls, and {} mismatches. Existing \
+             mismatch primary classes are preserved: {} `pending_rule_review`, {} \
+             `corpus_suspect`, and {} `unsupported_character_review`. Of {} evaluable \
+             mismatches, {} are output-localized to the current later-run signature plus its one \
+             leading boundary cell: {} `{target}` and {} `{reverse}`. The target counted {} raw \
+             and 333 residual cases before this cohort; it is now {} final residual. Across raw \
+             and final residual maps, `{reverse}` is {} -> {}. Exact controls coexist with both \
+             directions, and 321 mismatches are already independently identified corpus \
+             contradictions. Without a printed fresh-entry example or semantic enclosure model, \
+             changing continuation state would be reference-fitting; this remains a deterministic \
+             pending/corpus-review cohort only. Representative shard/index samples are retained \
+             above.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_transition(target),
+            localized_transition(reverse),
+            raw_transition(target),
+            residual_transition(target),
+            raw_transition(reverse),
+            residual_transition(reverse),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(ALLCAPS_ROMAN_RUN_CONTAINING_ST)
     {
         let primary_count = |name: &str| {
@@ -5286,6 +5495,27 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::parenthetical_then_comma("인공지능(AI), ChatGTP", vec!["ChatGTP"])]
+    #[case::parenthetical_then_plain("액티브(H) ETF", vec!["ETF"])]
+    #[case::parenthetical_then_quoted("다목적선(MPV) ‘HMM 울산호’", vec!["HMM"])]
+    #[case::quoted_then_quoted("‘아리송(ARISONG)’, ‘Boyfriend’", vec!["Boyfriend"])]
+    #[case::ordinary_roman_words("Los Angeles", vec![])]
+    #[case::unclosed_parenthetical("인공지능(AI ChatGTP", vec![])]
+    #[case::nonroman_enclosure("항목(가) ETF", vec![])]
+    #[case::no_whitespace("인공지능(AI),ChatGTP", vec![])]
+    #[case::numeric_next("액티브(H) 3ETF", vec![])]
+    fn detects_roman_run_after_closed_roman_enclosure(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_run_after_closed_roman_enclosure_spans(input)
+            .into_iter()
+            .map(|run| &input[run.start_byte..run.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
     #[case::common_initialisms("M&A P&G R&D", vec!["M&A", "P&G", "R&D"])]
     #[case::ueb_examples("AT&T B&B", vec!["AT&T", "B&B"])]
     #[case::multiple_ampersands("A&B&C", vec!["A&B&C"])]
@@ -5565,6 +5795,20 @@ mod tests {
     fn localizes_allcaps_ar_signature_in_complete_output(#[case] input: &str) {
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = allcaps_ar_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::parenthetical_then_comma("인공지능(AI), ChatGTP")]
+    #[case::parenthetical_then_plain("액티브(H) ETF")]
+    #[case::parenthetical_then_quoted("다목적선(MPV) ‘HMM 울산호’")]
+    #[case::quoted_then_quoted("‘아리송(ARISONG)’, ‘Boyfriend’")]
+    fn localizes_roman_after_closed_enclosure_signature(#[case] input: &str) {
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = roman_after_closed_enclosure_actual_ranges(input, &actual);
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
