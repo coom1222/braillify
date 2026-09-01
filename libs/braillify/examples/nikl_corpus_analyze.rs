@@ -597,6 +597,8 @@ const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_pa
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
 const UPPERCASE_ROMAN_HYPHEN_DIGITS: &str = "uppercase_roman_run_followed_by_hyphen_digits";
+const UPPERCASE_ALPHANUMERIC_ROMAN_DIGIT_SEQUENCE: &str =
+    "uppercase_alphanumeric_roman_digit_sequence";
 const DECIMAL_POINT_BETWEEN_DIGITS: &str = "decimal_point_between_ascii_digits";
 const COMPACT_NUMERIC_ASCII_SUFFIX: &str = "compact_numeric_ascii_letter_suffix";
 const RULE69_ASCII_UNIT_BEFORE_TERMINATOR_SKIPPING_SYMBOL: &str =
@@ -1912,6 +1914,82 @@ fn uppercase_roman_hyphen_digit_spans(input: &str) -> Vec<InputSpan> {
     spans
 }
 
+/// Finds a maximal uppercase/digit Roman sequence beginning with a capital,
+/// optionally joined by ASCII hyphen-minus or full stop. A trailing prose
+/// comma/colon/semicolon is included in the observed boundary. Rule 35 covers
+/// the Roman-number reading, while math rules 11/12 leave the same surface
+/// potentially ambiguous as a variable expression; this detector assigns
+/// neither meaning.
+fn uppercase_alphanumeric_roman_digit_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_uppercase()
+            || input[..cursor]
+                .chars()
+                .next_back()
+                .is_some_and(|previous| previous.is_ascii_alphanumeric())
+        {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start_byte = cursor;
+        let mut has_digit = false;
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        {
+            has_digit |= bytes[cursor].is_ascii_digit();
+            cursor += 1;
+        }
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| matches!(byte, b'-' | b'.'))
+            && bytes
+                .get(cursor + 1)
+                .is_some_and(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        {
+            cursor += 1;
+            while bytes
+                .get(cursor)
+                .is_some_and(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+            {
+                has_digit |= bytes[cursor].is_ascii_digit();
+                cursor += 1;
+            }
+        }
+        let sequence_end = cursor;
+        if bytes
+            .get(cursor)
+            .is_some_and(|byte| matches!(byte, b',' | b':' | b';'))
+        {
+            cursor += 1;
+        }
+        if has_digit
+            && input[cursor..]
+                .chars()
+                .next()
+                .is_none_or(|next| !next.is_ascii_alphanumeric())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte: cursor,
+            });
+        } else if cursor == start_byte {
+            cursor += 1;
+        } else if cursor > sequence_end {
+            cursor = sequence_end;
+        }
+    }
+    spans
+}
+
 fn first_difference_in_signature_spans(
     item: &EncodedCase,
     spans: &[InputSpan],
@@ -2073,9 +2151,18 @@ fn first_difference_claimed_before_attached_ascii_roman_to_korean(item: &Encoded
     first_difference_claimed_before_allcaps_ed(item) || first_difference_in_allcaps_ed_run(item)
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_uppercase_alphanumeric_roman_digit(item: &EncodedCase) -> bool {
     first_difference_claimed_before_attached_ascii_roman_to_korean(item)
         || first_difference_at_attached_ascii_roman_to_korean_boundary(item)
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_uppercase_alphanumeric_roman_digit(item)
+        || first_difference_at_input_span_entry(
+            item,
+            &uppercase_alphanumeric_roman_digit_spans(&item.located.case.input),
+            2,
+        )
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3000,6 +3087,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            UPPERCASE_ALPHANUMERIC_ROMAN_DIGIT_SEQUENCE.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_SHORTFORM_PREFIX_COLLISION.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3265,6 +3356,19 @@ fn analyze(
                     1,
                 )),
                 false,
+            ),
+            (
+                UPPERCASE_ALPHANUMERIC_ROMAN_DIGIT_SEQUENCE,
+                !uppercase_alphanumeric_roman_digit_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_uppercase_alphanumeric_roman_digit(item)
+                        && first_difference_at_input_span_entry(
+                            item,
+                            &uppercase_alphanumeric_roman_digit_spans(&item.located.case.input),
+                            2,
+                        ),
+                ),
+                true,
             ),
             (
                 ALLCAPS_SHORTFORM_PREFIX_COLLISION,
@@ -3783,7 +3887,11 @@ fn markdown(report: &AnalysisReport) -> String {
          run, literal ASCII hyphen-minus, a non-empty digit run, and alphanumeric outer \
          boundaries. Its localized range includes the current encoded run and its immediately \
          preceding cell, keeping `F-35`-style routing separate from both parenthesized digits and \
-         headword expansions. The \
+         headword expansions. The `uppercase_alphanumeric_roman_digit_sequence` gate covers the \
+         wider rule-35/math collision: a capital-led uppercase/digit sequence with optional \
+         internal ASCII hyphen/full stop and trailing prose comma/colon/semicolon. It localizes \
+         only the current entry cells and does not decide whether an `A-3`-shaped surface is an \
+         identifier or a mathematical expression. The \
          `standalone_multi_character_uppercase_roman_word` gate finds maximal ASCII-letter runs \
          of two or more capitals with non-alphanumeric boundaries; a run immediately followed \
          by `(` is excluded so the HCA-style headword itself is not counted by both gates. The \
@@ -4798,6 +4906,46 @@ fn markdown(report: &AnalysisReport) -> String {
              subcluster, and {}/{} evaluable mismatches whose first difference is inside the \
              target run plus its entry boundary. It remains distinct from parenthesized digits \
              and headword expansions; no engine change is inferred.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(UPPERCASE_ALPHANUMERIC_ROMAN_DIGIT_SEQUENCE)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        let target = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2834 ⠴ -> U+2800 ⠀")
+            .copied()
+            .unwrap_or(0);
+        let reverse = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2800 ⠀ -> U+2834 ⠴")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent uppercase alphanumeric Roman-digit sequence measurement: {} candidates, \
+             {} exact controls, {} mismatches, {pending} members in the actual \
+             `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose first \
+             difference is localized to the current entry cells. The target `⠴ -> blank` occurs \
+             {target} times and the reverse occurs {reverse} times. Korean rule 35 (2024 \
+             Korean-rules PDF pp.29-30, printed pp.23-24) explicitly treats `MP3`, `A4`, `KF94`, \
+             and `D-100` as Roman-number sequences. Math rules 11/12 (PDF pp.63-65, printed \
+             pp.57-59) separately route mathematical Roman notation without the prose Roman \
+             indicator and with two-cell spacing. Official UEB 6.5.1-6.5.2 (2024 UEB PDF p.96, \
+             printed p.68) determines numeric/grade-1 continuation only after the surrounding \
+             mode has been chosen. Thus surfaces such as `A-3` cannot be assigned identifier or \
+             variable semantics from this structure alone. Exact controls and both directions \
+             are retained; no engine change is inferred.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -5897,6 +6045,37 @@ mod tests {
         assert_eq!(&input[spans[0].start_byte..spans[0].end_byte], "F-35");
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
+    }
+
+    #[rstest::rstest]
+    #[case::rule35_kf94("요즘에는 KF94 마스크가 필수입니다.", vec!["KF94"])]
+    #[case::rule35_mp4("새로운 MP4 Player를 출시했다.", vec!["MP4"])]
+    #[case::rule35_d100("2023학년도 수능 D-100일 학습 전략", vec!["D-100"])]
+    #[case::corpus_complex_identifier("항공기 E-4B 나이트워치", vec!["E-4B"])]
+    #[case::decimal_identifier("사업 LINC3.0 참여", vec!["LINC3.0"])]
+    #[case::trailing_comma("브랜드 C27, 도넛킬러", vec!["C27,"])]
+    #[case::unicode_minus_control("기종 F−35", vec![])]
+    fn detects_uppercase_alphanumeric_roman_digit_sequences(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = uppercase_alphanumeric_roman_digit_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn localizes_current_complex_identifier_entry_without_using_expected() {
+        let input = "항공기로 불리는 E-4B 나이트워치";
+        let spans = uppercase_alphanumeric_roman_digit_spans(input);
+        let actual = braillify::encode_to_unicode(input).expect("identifier probe must encode");
+        let ranges = current_engine_input_entry_ranges(input, &actual, &spans, 2);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠀'));
     }
 
     #[rstest::rstest]
