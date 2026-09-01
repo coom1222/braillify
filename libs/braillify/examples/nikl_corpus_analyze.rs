@@ -605,6 +605,8 @@ const KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX: &str =
     "korean_prefixed_roman_parenthetical_followed_by_allcaps_hyphen_suffix";
 const CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY: &str =
     "uppercase_word_after_whitespace_continuing_ascii_roman_text";
+const ROMAN_PARENTHETICAL_AFTER_NONLETTER_BOUNDARY: &str =
+    "closed_roman_parenthetical_after_non_ascii_letter_boundary";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
@@ -1255,6 +1257,46 @@ fn consecutive_roman_uppercase_word_spans(input: &str) -> Vec<InputSpan> {
     spans
 }
 
+/// Finds a closed, non-nested parenthetical whose body starts with a Roman
+/// letter and whose opening does not immediately follow another ASCII letter.
+/// This includes rule-34 enclosure contexts after Korean, digits, whitespace,
+/// or quotes while excluding direct function-call shapes such as `f(x)`.
+/// Standalone `(x)` remains an intentional math-rule-6 control, so this is an
+/// analyzer cohort rather than an engine routing predicate.
+fn roman_parenthetical_after_nonletter_boundary_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = Vec::new();
+    for (open, _) in input.match_indices('(') {
+        if input[..open]
+            .chars()
+            .next_back()
+            .is_some_and(|previous| previous.is_ascii_alphabetic())
+        {
+            continue;
+        }
+        let body_start = open + 1;
+        if !input[body_start..]
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+        {
+            continue;
+        }
+        let Some((close_offset, close)) = input[body_start..]
+            .char_indices()
+            .find(|(_, ch)| matches!(ch, '(' | ')'))
+        else {
+            continue;
+        };
+        if close == ')' {
+            spans.push(InputSpan {
+                start_byte: open,
+                end_byte: body_start + close_offset + 1,
+            });
+        }
+    }
+    spans
+}
+
 /// Locates each detected run in the full current-engine output by searching
 /// for that run's independently encoded signature. This uses neither the
 /// corpus reference nor a hard-coded braille value.
@@ -1440,6 +1482,44 @@ fn first_difference_at_input_span_entry(
     }
     let first_difference = first_difference_cell(&item.located.case.unicode, actual);
     current_engine_input_entry_ranges(&item.located.case.input, actual, spans, entry_cells)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
+/// Locates the opening of a complete parenthetical through its independently
+/// encoded current-engine signature. This complements prefix offsets: a
+/// trailing digit can change how an isolated prefix exits Roman/number mode,
+/// and whitespace belongs before rather than inside the parenthetical entry.
+fn current_engine_parenthetical_entry_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+    entry_cells: usize,
+) -> Vec<std::ops::Range<usize>> {
+    roman_entry_signature_ranges(input, actual, spans, 0)
+        .into_iter()
+        .filter_map(|signature| {
+            let end = signature
+                .start
+                .saturating_add(entry_cells)
+                .min(signature.end);
+            (signature.start < end).then_some((signature.start, end))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(start, end)| start..end)
+        .collect()
+}
+
+fn first_difference_at_parenthetical_entry(item: &EncodedCase, spans: &[InputSpan]) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    current_engine_parenthetical_entry_ranges(&item.located.case.input, actual, spans, 3)
         .into_iter()
         .any(|range| range.contains(&first_difference))
 }
@@ -1677,11 +1757,19 @@ fn first_difference_claimed_before_consecutive_roman_reentry(item: &EncodedCase)
         )
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_nonletter_parenthetical(item: &EncodedCase) -> bool {
     first_difference_claimed_before_consecutive_roman_reentry(item)
         || first_difference_in_current_roman_entry_signature(
             item,
             &consecutive_roman_uppercase_word_spans(&item.located.case.input),
+        )
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_nonletter_parenthetical(item)
+        || first_difference_at_parenthetical_entry(
+            item,
+            &roman_parenthetical_after_nonletter_boundary_spans(&item.located.case.input),
         )
 }
 
@@ -2360,6 +2448,10 @@ fn analyze(
             CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
+        (
+            ROMAN_PARENTHETICAL_AFTER_NONLETTER_BOUNDARY.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
@@ -2633,6 +2725,21 @@ fn analyze(
                         && first_difference_in_current_roman_entry_signature(
                             item,
                             &consecutive_roman_uppercase_word_spans(&item.located.case.input),
+                        ),
+                ),
+                true,
+            ),
+            (
+                ROMAN_PARENTHETICAL_AFTER_NONLETTER_BOUNDARY,
+                !roman_parenthetical_after_nonletter_boundary_spans(&item.located.case.input)
+                    .is_empty(),
+                Some(
+                    !first_difference_claimed_before_nonletter_parenthetical(item)
+                        && first_difference_at_parenthetical_entry(
+                            item,
+                            &roman_parenthetical_after_nonletter_boundary_spans(
+                                &item.located.case.input,
+                            ),
                         ),
                 ),
                 true,
@@ -2940,6 +3047,7 @@ fn markdown(report: &AnalysisReport) -> String {
                     .chars()
                     .take(180)
                     .collect::<String>()
+                    .trim_end()
                     .replace('`', "\\`"),
                 sample.expected_excerpt,
                 sample.actual_excerpt,
@@ -2987,6 +3095,7 @@ fn markdown(report: &AnalysisReport) -> String {
                     .chars()
                     .take(180)
                     .collect::<String>()
+                    .trim_end()
                     .replace('`', "\\`"),
                 sample.expected_excerpt,
                 sample.actual_excerpt,
@@ -3132,6 +3241,7 @@ fn markdown(report: &AnalysisReport) -> String {
                         .chars()
                         .take(180)
                         .collect::<String>()
+                        .trim_end()
                         .replace('`', "\\`"),
                     sample.expected_excerpt,
                     sample.actual_excerpt,
@@ -3461,6 +3571,83 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.mismatch,
             stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ROMAN_PARENTHETICAL_AFTER_NONLETTER_BOUNDARY)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_transition = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let residual_transition = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let raw_transition = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let target = "U+2826 ⠦ -> U+2834 ⠴";
+        let reverse = "U+2834 ⠴ -> U+2826 ⠦";
+        let open_to_space = "U+2826 ⠦ -> U+2800 ⠀";
+        text.push_str(&format!(
+            "### Closed Roman parenthetical after a non-ASCII-letter boundary\n\n\
+             Korean rule 34 (2024 Korean-rules PDF p.29) prints the opening enclosure before \
+             Roman entry in `링컨(Lincoln)`: the opening sequence is `⠦⠄⠴`. This output-position \
+             cohort finds a closed, non-nested parenthetical whose body begins with an ASCII \
+             letter and whose opening does not immediately follow another ASCII letter, then \
+             locates its complete current-engine signature without consulting the reference. \
+             Direct function-call shapes such as `f(x)` are excluded. The PDF's math rule 6 \
+             (p.59), rule 12 (pp.63-64), and rule 45 (p.75) nevertheless leave standalone `(x)` \
+             and other Roman-letter parenthetical mathematics as counterexamples, so the \
+             surface gate is not an engine-routing predicate.\n\n\
+             The cross-cutting input cohort contains {} candidates: {} exact controls and {} \
+             mismatches. Mismatch primary classes remain unchanged: {} `pending_rule_review`, \
+             {} `corpus_suspect`, {} `comparison_method`, and {} \
+             `unsupported_character_review`. Of {} evaluable mismatches, {} have the first \
+             difference at the detected opening; these include {} `{target}`, {} `{reverse}`, \
+             and {} `{open_to_space}` transitions. After all earlier localized cohorts and this \
+             cohort are excluded, the raw-to-residual target count is {} -> {} and the reverse \
+             count is {} -> {}. The short full-encoder form `웹3(Web3)` emits the PDF opening \
+             order as a routing control, while whitespace and quote boundaries reproduce the current Roman-first \
+             opening. Representative localized samples, with shard and index, are retained in \
+             the generated cluster sample table. Because exact controls are abundant and the PDF \
+             does not make this input shape semantically sufficient to exclude mathematics, no \
+             engine change or primary reclassification is inferred.\n\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_transition(target),
+            localized_transition(reverse),
+            localized_transition(open_to_space),
+            raw_transition(target),
+            residual_transition(target),
+            raw_transition(reverse),
+            residual_transition(reverse),
         ));
     }
     text.push_str(
@@ -4770,6 +4957,26 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[rstest::rstest]
+    #[case::pdf_rule_34("링컨(Lincoln)은", vec!["(Lincoln)"])]
+    #[case::after_digit("웹3(Web3)", vec!["(Web3)"])]
+    #[case::after_whitespace("전시회 (Moulding Expo)", vec!["(Moulding Expo)"])]
+    #[case::after_quote("선언’(Washington Declaration)", vec!["(Washington Declaration)"])]
+    #[case::function_call("f(x)", vec![])]
+    #[case::standalone_math_control("(x)", vec!["(x)"])]
+    #[case::nested_math_control("(f(x))", vec![])]
+    #[case::korean_first_body("(한글 AI)", vec![])]
+    fn detects_closed_roman_parenthetical_after_non_ascii_letter_boundary(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_parenthetical_after_nonletter_boundary_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn full_encoder_does_not_reenter_before_consecutive_uppercase_word() {
         let input = "가(NEW YORK)";
@@ -4822,6 +5029,23 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
         assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::short_digit_exact_control("웹3(Web3)", '⠦')]
+    #[case::after_whitespace("전시회 (Moulding Expo)", '⠴')]
+    #[case::after_quote("선언’(Washington Declaration)", '⠴')]
+    fn locates_nonletter_parenthetical_opening_in_current_output(
+        #[case] input: &str,
+        #[case] expected_opening: char,
+    ) {
+        let spans = roman_parenthetical_after_nonletter_boundary_spans(input);
+        let actual = braillify::encode_to_unicode(input).expect("parenthetical probe must encode");
+        let ranges = current_engine_parenthetical_entry_ranges(input, &actual, &spans, 3);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(actual.chars().nth(ranges[0].start), Some(expected_opening));
     }
 
     #[test]
