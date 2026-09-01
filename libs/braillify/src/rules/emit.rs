@@ -298,7 +298,14 @@ fn word_context<'a>(word_texts: &'a [&'a str], word_index: usize) -> WordContext
 fn emit_mode_event(event: ModeEvent, state: &mut EncoderState, result: &mut Vec<u8>) {
     match event {
         ModeEvent::EnterEnglish => {
-            result.push(52);
+            // Korean rule 29 uses one Roman section for consecutive Roman
+            // text. Token-level capitalization can discover a later word and
+            // request entry again after the character emitter has already kept
+            // that section open; make the explicit event idempotent at the
+            // authoritative emit-state boundary.
+            if !state.is_english {
+                result.push(52);
+            }
             state.is_english = true;
             state.needs_english_continuation = false;
             state.roman_number_chain = false;
@@ -874,6 +881,40 @@ mod tests {
         let out = emit(&mut ir, &mut engine).unwrap();
 
         assert!(out.starts_with(&[52, 32, 32]));
+        assert_eq!(out.iter().filter(|byte| **byte == 52).count(), 1);
+    }
+
+    /// Korean rule 29: consecutive Roman text shares one Roman section. A
+    /// token-level rediscovery of capitalization must not emit a second entry
+    /// when the final character emitter is still in that section.
+    #[test]
+    fn repeated_explicit_roman_entry_is_idempotent_in_active_section() {
+        let new_chars = "NEW".chars().collect::<Vec<_>>();
+        let york_chars = "YORK".chars().collect::<Vec<_>>();
+        let mut ir = DocumentIR {
+            tokens: vec![
+                Token::Mode(ModeEvent::EnterEnglish),
+                Token::Mode(ModeEvent::CapsWord),
+                Token::Word(WordToken {
+                    text: Cow::Borrowed("NEW"),
+                    chars: new_chars.clone(),
+                    meta: super::super::token::WordMeta::from_chars(&new_chars),
+                }),
+                Token::Space(SpaceKind::Regular),
+                Token::Mode(ModeEvent::EnterEnglish),
+                Token::Mode(ModeEvent::CapsWord),
+                Token::Word(WordToken {
+                    text: Cow::Borrowed("YORK"),
+                    chars: york_chars.clone(),
+                    meta: super::super::token::WordMeta::from_chars(&york_chars),
+                }),
+            ],
+            state: EncoderState::new(true),
+        };
+        let mut engine = make_char_engine();
+
+        let out = emit(&mut ir, &mut engine).unwrap();
+
         assert_eq!(out.iter().filter(|byte| **byte == 52).count(), 1);
     }
 

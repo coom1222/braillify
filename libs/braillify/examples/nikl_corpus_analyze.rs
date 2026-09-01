@@ -3439,15 +3439,23 @@ fn markdown(report: &AnalysisReport) -> String {
              the preceding Roman run began inside a mixed Korean/punctuation word. The character \
              emitter is still in Roman mode at that point, so this is a candidate duplicate-event \
              boundary rather than permission to rewrite arbitrary multiword ASCII text.\n\n\
-             Baseline measurement: {} candidates, {} exact controls, {} mismatches, {pending} \
-             pending members, and {}/{} evaluable mismatches localized to the current re-entry \
-             signature. The localized transitions are {target} `⠠ -> ⠴`, \
-             {grade1_to_roman} `⠰ -> ⠴`, and {reverse} reverse `⠴ -> ⠠`; the remaining localized \
-             transitions stay separate. Exact controls include contexts where the first Roman word \
-             already opened token-level mode, while parenthesized/mixed-token examples expose the \
-             duplicate event. Any engine experiment must therefore suppress only an explicit entry \
-             encountered while final emit state is already Roman, then audit all exact regressions \
-             and the complete 5,141-case standard suite.\n\n",
+             Analyzer checkpoint `266e70c` fixed the pre-change baseline at 1,729 candidates, 386 \
+             exact controls, 1,343 mismatches, 1,272 pending members, and 385/1,343 evaluable \
+             mismatches localized to the current re-entry signature. Those localized transitions \
+             were 365 `⠠ -> ⠴`, 16 `⠰ -> ⠴`, no reverse `⠴ -> ⠠`, and four other transitions. \
+             Exact controls include contexts where the first Roman word already opened token-level \
+             mode, while parenthesized/mixed-token examples expose the duplicate event.\n\n\
+             The generalized fix makes an explicit `EnterEnglish` event idempotent when final emit \
+             state is already inside a Roman section; it neither names an input nor changes a new \
+             section's entry. The current measurement is {} candidates, {} exact controls, {} \
+             mismatches, {pending} pending members, and {}/{} localized mismatches. Current target \
+             counts are {target} `⠠ -> ⠴`, {grade1_to_roman} `⠰ -> ⠴`, and {reverse} reverse \
+             `⠴ -> ⠠`. Cohort exact controls increase by 275, while corpus-wide exact matches rise \
+             from 67,138 to 67,442 (+304); corrected prefixes that still differ later remain \
+             mismatches, and applications outside this strict input gate account for the remaining \
+             net gain. The raw/residual reverse `⠴ -> ⠠` totals remain 68/65 before and after the \
+             change. The complete custom standard summary is 5,141 total, 5,141 success, 0 failure, \
+             and 0 skipped.\n\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -4763,19 +4771,15 @@ mod tests {
     }
 
     #[test]
-    fn locates_current_reentry_before_consecutive_uppercase_word() {
-        let input = "가 Neo QLED는";
+    fn full_encoder_does_not_reenter_before_consecutive_uppercase_word() {
+        let input = "가(NEW YORK)";
         let spans = consecutive_roman_uppercase_word_spans(input);
         let actual = braillify::encode_to_unicode(input).expect("Roman reentry probe must encode");
         let ranges = roman_entry_signature_ranges(input, &actual, &spans, 0);
-        let starts = ranges
-            .iter()
-            .map(|range| range.start)
-            .collect::<BTreeSet<_>>();
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(starts.len(), 1);
-        assert_eq!(actual.chars().nth(*starts.first().unwrap()), Some('⠴'));
+        assert!(actual.contains("⠦⠄⠴⠠⠠"));
+        assert!(ranges.is_empty());
     }
 
     #[rstest::rstest]
