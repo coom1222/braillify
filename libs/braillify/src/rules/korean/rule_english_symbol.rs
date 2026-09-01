@@ -103,13 +103,29 @@ impl BrailleRule for RuleEnglishSymbol {
             if let Some(encoded) = symbol_shortcut::encode_english_char_symbol_shortcut(*sym) {
                 ctx.emit_slice(&encoded);
                 if *sym == '-' && ctx.state.is_english {
-                    // 다음 글자가 숫자이면 수표(⠼)가 emit되므로 연속표(⠰)는
-                    // 불필요하다 (제35항 D-100 같은 영문-숫자 인접 패턴).
-                    let next_is_digit = ctx
-                        .word_chars
-                        .get(ctx.index + 1)
-                        .is_some_and(|c| c.is_ascii_digit());
-                    if !next_is_digit {
+                    // UEB 5.7.2의 `CD-ROM`은 순수 대문자 segment 사이의 하이픈
+                    // 뒤에서 대문자 단어표 앞에 1급 점자 기호표를 다시 적지
+                    // 않는다. 숫자는 제35항 `D-100`처럼 수표가 나오므로 역시
+                    // 로마자 연속표(⠰)가 불필요하다. 혼합 대소문자 prefix와 단일
+                    // 대문자 suffix는 이 근거 범위 밖이므로 기존 경계를 보존한다.
+                    let prefix_len = ctx.word_chars[..ctx.index]
+                        .iter()
+                        .rev()
+                        .take_while(|c| c.is_ascii_alphabetic())
+                        .count();
+                    let prefix = &ctx.word_chars[ctx.index - prefix_len..ctx.index];
+                    let suffix = &ctx.word_chars[ctx.index + 1..];
+                    let suffix_len = suffix
+                        .iter()
+                        .take_while(|c| c.is_ascii_alphabetic())
+                        .count();
+                    let suffix_letters = &suffix[..suffix_len];
+                    let next_has_own_indicator = suffix.first().is_some_and(char::is_ascii_digit)
+                        || (!prefix.is_empty()
+                            && prefix.iter().all(char::is_ascii_uppercase)
+                            && suffix_letters.len() >= 2
+                            && suffix_letters.iter().all(char::is_ascii_uppercase));
+                    if !next_has_own_indicator {
                         ctx.emit(crate::rules::korean::rule_29::ENGLISH_CONTINUATION);
                     }
                 }
@@ -206,6 +222,29 @@ mod tests {
         assert!(
             actual.contains(&standalone),
             "input={input}, decimal={decimal}, actual={actual}, standalone={standalone}"
+        );
+    }
+
+    /// UEB 5.7.2 prints `CD-ROM` with one grade-1 indicator before the complete
+    /// letters-sequence and no second grade-1 indicator after the hyphen. This
+    /// full-encoder wrapper exercises the Korean rule-29 character route rather
+    /// than the standalone-English token route used by the standard PDF case.
+    #[test]
+    fn korean_wrapper_keeps_pdf_cd_rom_as_one_grade1_letters_sequence() {
+        let output = crate::encode("가(CD-ROM)나").expect("Korean wrapper must encode");
+        let expected_ueb = "⠰⠠⠠⠉⠙⠤⠠⠠⠗⠕⠍"
+            .chars()
+            .map(crate::unicode::decode_unicode)
+            .collect::<Vec<_>>();
+        let roman_start = output
+            .iter()
+            .position(|cell| *cell == crate::rules::korean::rule_29::ROMAN_INDICATOR)
+            .expect("Korean wrapper must enter one Roman section")
+            + 1;
+
+        assert_eq!(
+            output.get(roman_start..roman_start + expected_ueb.len()),
+            Some(expected_ueb.as_slice())
         );
     }
 }

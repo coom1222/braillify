@@ -595,6 +595,8 @@ const ROMAN_UPPERCASE_AFTER_DIGIT: &str =
     "uppercase_ascii_run_immediately_after_digit_in_roman_sequence";
 const ROMAN_UPPERCASE_AFTER_HYPHEN: &str =
     "uppercase_ascii_run_immediately_after_hyphen_in_roman_sequence";
+const PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS: &str =
+    "pure_allcaps_segment_before_hyphen_and_multi_allcaps_segment_after";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
@@ -1058,6 +1060,40 @@ fn roman_uppercase_after_hyphen_spans(input: &str) -> Vec<InputSpan> {
         }
     }
     spans
+}
+
+/// Narrows the broad hyphen continuation diagnostic to the UEB 5.7.2
+/// `CD-ROM` boundary implemented by the engine: the immediately adjacent
+/// letter segment before the hyphen is pure uppercase, and the immediately
+/// adjacent segment after it is pure uppercase with at least two letters.
+fn pure_allcaps_hyphen_multi_allcaps_spans(input: &str) -> Vec<InputSpan> {
+    roman_uppercase_after_hyphen_spans(input)
+        .into_iter()
+        .filter(|span| {
+            let run = &input.as_bytes()[span.start_byte..span.end_byte];
+            run.iter().enumerate().any(|(hyphen, byte)| {
+                if *byte != b'-' {
+                    return false;
+                }
+                let prefix_start = run[..hyphen]
+                    .iter()
+                    .rposition(|byte| !byte.is_ascii_alphabetic())
+                    .map_or(0, |index| index + 1);
+                let prefix = &run[prefix_start..hyphen];
+                let suffix = &run[hyphen + 1..];
+                let suffix_len = suffix
+                    .iter()
+                    .take_while(|byte| byte.is_ascii_alphabetic())
+                    .count();
+                let suffix_letters = &suffix[..suffix_len];
+
+                !prefix.is_empty()
+                    && prefix.iter().all(u8::is_ascii_uppercase)
+                    && suffix_letters.len() >= 2
+                    && suffix_letters.iter().all(u8::is_ascii_uppercase)
+            })
+        })
+        .collect()
 }
 
 /// Locates each detected run in the full current-engine output by searching
@@ -2057,6 +2093,10 @@ fn analyze(
             ROMAN_UPPERCASE_AFTER_HYPHEN.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
+        (
+            PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
@@ -2259,6 +2299,18 @@ fn analyze(
                         && first_difference_in_grade1_cohort_spans(
                             item,
                             &roman_uppercase_after_hyphen_spans(&item.located.case.input),
+                        ),
+                ),
+                true,
+            ),
+            (
+                PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS,
+                !pure_allcaps_hyphen_multi_allcaps_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_by_prior_localized_cohort(item)
+                        && first_difference_in_grade1_cohort_spans(
+                            item,
+                            &pure_allcaps_hyphen_multi_allcaps_spans(&item.located.case.input),
                         ),
                 ),
                 true,
@@ -2776,7 +2828,7 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     text.push_str("\n## UEB grade-1 first-difference cohorts\n\n");
     text.push_str(
-        "These three cohorts are defined by both an input boundary and the sentence's actual \
+        "These cohorts are defined by both an input boundary and the sentence's actual \
          first-difference transition. They therefore do not claim every mismatch merely \
          coexisting with an ASCII run. Candidate, exact, mismatch, and primary-class counts \
          remain cross-cutting controls; only the reported target transition is the localized \
@@ -2800,6 +2852,11 @@ fn markdown(report: &AnalysisReport) -> String {
         ),
         (
             ROMAN_UPPERCASE_AFTER_HYPHEN,
+            "U+2820 ⠠ -> U+2830 ⠰",
+            "U+2830 ⠰ -> U+2820 ⠠",
+        ),
+        (
+            PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS,
             "U+2820 ⠠ -> U+2830 ⠰",
             "U+2830 ⠰ -> U+2820 ⠠",
         ),
@@ -2923,21 +2980,34 @@ fn markdown(report: &AnalysisReport) -> String {
          non-exact members are not attributed to the removed uppercase transition: \
          their sentence-level first difference may lie in another structure and \
          remains under its existing primary class. This numeric state change remains \
-         separate from both the complete-shortform guard and the still-unimplemented \
-         hyphen continuation cohort.\n\n\
+         separate from both the complete-shortform guard and the hyphen continuation \
+         boundary below.\n\n\
          ### Uppercase immediately after a hyphen\n\n\
          UEB rule 5.7.2 prints `CD-ROM` with one grade-1 indicator before `CD` and \
          no second grade-1 indicator after the hyphen. Korean rule 29 similarly \
-         uses one Roman span for consecutive Roman text. The 312 localized \
-         `⠠ -> ⠰` cases are therefore tracked as a distinct hyphen-continuation \
-         candidate. The three reverse cases, only 31 exact controls in the broad \
-         cohort, and surfaces whose first difference lies elsewhere remain \
-         controls. This route is judged separately from digit-hyphen forms such as \
-         `F-35`, which this detector excludes, and separately from the shortform \
-         guard that legitimately precedes `CD` in `CD-ROM`.\n\n",
+         uses one Roman span for consecutive Roman text. Before the engine change, \
+         the broad diagnostic contained 952 candidates / 32 exact / 920 mismatch, \
+         with 312 localized `⠠ -> ⠰` and 2 reverse transitions. A blanket \
+         uppercase-suffix removal reached 67,222 (+210) but made the broad cohort's \
+         single-capital controls such as `Around-U`, `DALL-E`, `ISMS-P`, and `USB-C` \
+         non-exact; it was rejected. Requiring only a two-letter uppercase suffix \
+         reached 67,162 (+150) but regressed the mixed-prefix exact control `Ko-LLM`; \
+         it was also rejected. The retained boundary matches the complete PDF shape: \
+         the immediately adjacent prefix is a pure-uppercase letter segment and the \
+         immediately adjacent suffix is a pure-uppercase segment of at least two \
+         letters. It reaches 67,138 (+126) while preserving all 32 baseline exact \
+         controls. The broad diagnostic now contains 952 candidates / 158 exact / \
+         794 mismatch, with 157 localized `⠠ -> ⠰` and 3 reverse transitions. The \
+         dedicated `pure_allcaps_segment_before_hyphen_and_multi_allcaps_segment_after` \
+         row reports only the implemented subset; broad mixed-case and single-capital \
+         members remain controls or pending review. `K-ALM` is the one new reverse \
+         surface but was already a mismatch before this change, not an exact \
+         regression. Digit-hyphen forms such as `F-35` remain excluded, and the \
+         complete-shortform guard still legitimately precedes `CD` in `CD-ROM`.\n\n",
     );
     text.push_str(
-        "\nThis shape is not an engine implementation premise. The 2024 PDF's math rule 6 \
+        "\nThe HCA-style headword-expansion shape described above is not an engine \
+         implementation premise. The 2024 PDF's math rule 6 \
          defines parentheses and grouping parentheses, rule 11 defines mathematical-expression \
          spacing, rule 12 covers Roman letters in formulas as well as Korean sentences, and \
          rule 45 shows Roman-letter function notation followed by parentheses. Excluding visible \
@@ -4152,6 +4222,22 @@ mod tests {
         #[case] expected: Vec<&str>,
     ) {
         let actual = roman_uppercase_after_hyphen_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::pdf_complete_letters_sequence("CD-ROM", vec!["CD-ROM"])]
+    #[case::single_capital_control("Around-U", vec![])]
+    #[case::mixed_prefix_control("Ko-LLM", vec![])]
+    #[case::digit_hyphen_control("F-35", vec![])]
+    fn detects_only_pure_allcaps_hyphen_multi_allcaps_engine_boundary(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = pure_allcaps_hyphen_multi_allcaps_spans(input)
             .into_iter()
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
