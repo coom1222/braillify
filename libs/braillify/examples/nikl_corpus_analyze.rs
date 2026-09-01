@@ -1766,6 +1766,7 @@ fn first_difference_at_input_span_entry(
 /// encoded current-engine signature. This complements prefix offsets: a
 /// trailing digit can change how an isolated prefix exits Roman/number mode,
 /// and whitespace belongs before rather than inside the parenthetical entry.
+#[cfg(test)]
 fn current_engine_parenthetical_entry_ranges(
     input: &str,
     actual: &str,
@@ -1787,7 +1788,32 @@ fn current_engine_parenthetical_entry_ranges(
         .collect()
 }
 
-fn first_difference_at_parenthetical_entry(item: &EncodedCase, spans: &[InputSpan]) -> bool {
+/// Extends the occurrence-specific parenthetical entry range by the two cells
+/// immediately before the current opening. Math rule 11 emits a two-blank
+/// boundary there, whereas Korean rules 34/54 attach an enclosure to adjacent
+/// prose. This is an output localizer only: it does not decide which semantic
+/// route owns the parenthetical.
+fn current_engine_parenthetical_leading_boundary_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = current_engine_input_entry_ranges(input, actual, spans, 5)
+        .into_iter()
+        .map(|range| (range.start, range.end))
+        .collect::<BTreeSet<_>>();
+    ranges.extend(
+        roman_entry_signature_ranges(input, actual, spans, 2)
+            .into_iter()
+            .filter_map(|signature| {
+                let end = signature.start.saturating_add(5).min(signature.end);
+                (signature.start < end).then_some((signature.start, end))
+            }),
+    );
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+fn first_difference_at_parenthetical_boundary(item: &EncodedCase, spans: &[InputSpan]) -> bool {
     let Ok(actual) = &item.actual else {
         return false;
     };
@@ -1795,7 +1821,7 @@ fn first_difference_at_parenthetical_entry(item: &EncodedCase, spans: &[InputSpa
         return false;
     }
     let first_difference = first_difference_cell(&item.located.case.unicode, actual);
-    current_engine_parenthetical_entry_ranges(&item.located.case.input, actual, spans, 3)
+    current_engine_parenthetical_leading_boundary_ranges(&item.located.case.input, actual, spans)
         .into_iter()
         .any(|range| range.contains(&first_difference))
 }
@@ -2230,7 +2256,7 @@ fn first_difference_claimed_before_nonletter_parenthetical(item: &EncodedCase) -
 
 fn first_difference_claimed_before_allcaps_st(item: &EncodedCase) -> bool {
     first_difference_claimed_before_nonletter_parenthetical(item)
-        || first_difference_at_parenthetical_entry(
+        || first_difference_at_parenthetical_boundary(
             item,
             &roman_parenthetical_after_nonletter_boundary_spans(&item.located.case.input),
         )
@@ -3608,7 +3634,7 @@ fn analyze(
                     .is_empty(),
                 Some(
                     !first_difference_claimed_before_nonletter_parenthetical(item)
-                        && first_difference_at_parenthetical_entry(
+                        && first_difference_at_parenthetical_boundary(
                             item,
                             &roman_parenthetical_after_nonletter_boundary_spans(
                                 &item.located.case.input,
@@ -4515,6 +4541,7 @@ fn markdown(report: &AnalysisReport) -> String {
         let target = "U+2826 ⠦ -> U+2834 ⠴";
         let reverse = "U+2834 ⠴ -> U+2826 ⠦";
         let open_to_space = "U+2826 ⠦ -> U+2800 ⠀";
+        let space_to_open = "U+2800 ⠀ -> U+2826 ⠦";
         text.push_str(&format!(
             "### Closed Roman parenthetical after a non-ASCII-letter boundary\n\n\
              Korean rule 34 (2024 Korean-rules PDF p.29) prints the opening enclosure before \
@@ -4522,7 +4549,10 @@ fn markdown(report: &AnalysisReport) -> String {
              cohort finds a closed, non-nested parenthetical whose body begins with an ASCII \
              letter and whose opening does not immediately follow another ASCII letter, then \
              locates its complete current-engine signature without consulting the reference. \
-             Direct function-call shapes such as `f(x)` are excluded. The PDF's math rule 6 \
+             Its localized boundary includes the two current output cells immediately before the \
+             opening plus the first three entry cells, so rule-11 math spacing can be separated \
+             from a difference later inside the parenthetical. Direct function-call shapes such \
+             as `f(x)` are excluded. The PDF's math rule 6 \
              (p.59), rule 12 (pp.63-64), and rule 45 (p.75) nevertheless leave standalone `(x)` \
              and other Roman-letter parenthetical mathematics as counterexamples, so the \
              surface gate is not an engine-routing predicate.\n\n\
@@ -4530,15 +4560,20 @@ fn markdown(report: &AnalysisReport) -> String {
              mismatches. Mismatch primary classes remain unchanged: {} `pending_rule_review`, \
              {} `corpus_suspect`, {} `comparison_method`, and {} \
              `unsupported_character_review`. Of {} evaluable mismatches, {} have the first \
-             difference at the detected opening; these include {} `{target}`, {} `{reverse}`, \
-             and {} `{open_to_space}` transitions. After all earlier localized cohorts and this \
-             cohort are excluded, the raw-to-residual target count is {} -> {} and the reverse \
-             count is {} -> {}. The short full-encoder form `웹3(Web3)` emits the PDF opening \
+             difference at the detected leading-spacing/entry boundary; these include {} \
+             `{target}`, {} `{reverse}`, \
+             and {} `{open_to_space}` transitions; the exact localized reverse `{space_to_open}` \
+             occurs {} times. After all earlier localized cohorts and this cohort are excluded, \
+             the raw-to-residual target count is {} -> {}, the Roman-indicator reverse count is \
+             {} -> {}, and the spacing target/reverse counts are {} -> {} and {} -> {}. The \
+             short full-encoder form `웹3(Web3)` emits the PDF opening \
              order as a routing control, while whitespace and quote boundaries reproduce the current Roman-first \
              opening. Representative localized samples, with shard and index, are retained in \
              the generated cluster sample table. Because exact controls are abundant and the PDF \
              does not make this input shape semantically sufficient to exclude mathematics, no \
-             engine change or primary reclassification is inferred.\n\n",
+             engine change or primary reclassification is inferred. The one raw/residual spacing \
+             reverse is a Korean-body `△(교육)` layout boundary, not a Roman-parenthetical member, \
+             and remains a separate rule-72/layout review.\n\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -4551,10 +4586,15 @@ fn markdown(report: &AnalysisReport) -> String {
             localized_transition(target),
             localized_transition(reverse),
             localized_transition(open_to_space),
+            localized_transition(space_to_open),
             raw_transition(target),
             residual_transition(target),
             raw_transition(reverse),
             residual_transition(reverse),
+            raw_transition(open_to_space),
+            residual_transition(open_to_space),
+            raw_transition(space_to_open),
+            residual_transition(space_to_open),
         ));
     }
     text.push_str(
@@ -6711,6 +6751,27 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(ranges.len(), 1);
         assert_eq!(actual.chars().nth(ranges[0].start), Some(expected_opening));
+    }
+
+    #[rstest::rstest]
+    #[case::attached_digit_suffix(
+        "안랩은 블록체인 자회사 안랩블록체인컴퍼니가 웹(Web)3 지갑인 ‘ABC 월렛(Wallet)’ 모바일 버전을 구글플레이와 애플 앱스토어에 출시했다고 10일 발표했다."
+    )]
+    #[case::attached_hyphen_suffix(
+        "인천시는 경제성 향상을 위해 유정복 인천시장의 민선8기 1호 공약인 제물포르네상스와 3기 신도시인 광명·시흥 공공주택지구 등 신규 개발계획을 반영하고, 수도권광역급행철도(GTX)-D Y자(인천공항행)와 연계 방안 등을 중점 검토한다."
+    )]
+    #[case::attached_middle_dot_suffix(
+        "10~11일에는 지역 주민들과 함께 하는 전야제를 포함해 아주대 50년사 출판 기념보고회, 인공지능(AI)·6G 융합 콜로키움 시리즈가 열린다."
+    )]
+    fn localizes_current_two_blank_boundary_before_roman_parenthetical(#[case] input: &str) {
+        let spans = roman_parenthetical_after_nonletter_boundary_spans(input);
+        let actual = braillify::encode_to_unicode(input).expect("parenthetical probe must encode");
+        let ranges = current_engine_parenthetical_leading_boundary_ranges(input, &actual, &spans);
+
+        assert!(!spans.is_empty());
+        assert!(ranges.iter().any(|range| {
+            actual.chars().skip(range.start).take(3).collect::<String>() == "⠀⠀⠦"
+        }));
     }
 
     #[test]
