@@ -5566,15 +5566,20 @@ fn markdown(report: &AnalysisReport) -> String {
              (2024 UEB PDF p.103, printed p.75) defines its prose comma as `⠂`, and UEB 6.2.1 \
              (PDF p.94, printed p.66) retains `⠂` inside attached numeric forms such as \
              `3,500`. Those two surfaces are negative controls and are excluded by this gate.\n\n\
-             Before any engine change, the cohort has {} candidates / {} exact / {} mismatch. \
+             The diagnostic baseline was 217 candidates / 7 exact / 210 mismatch, with 177 \
+             occurrence-specific `{korean_to_ueb}` first differences and no localized reverse. \
+             Rule 41 had looked through `remaining_words`, incorrectly treating whitespace as if \
+             the following digit were attached. The implementation now inspects only the next \
+             character in the same token. It neither names a corpus input nor consults expected \
+             output; attached numbers and UEB punctuation remain owned by their existing routes.\n\n\
+             After the correction, the cohort has {} candidates / {} exact / {} mismatch. \
              Existing mismatch primaries remain {} `pending_rule_review`, {} `corpus_suspect`, \
-             {} `comparison_method`, and {} `unsupported_character_review`. The \
-             occurrence-specific locator encodes the real prefix immediately before each comma \
-             and claims only its next emitted cell. Of {} evaluable mismatches, {} localize there, \
-             including {} `{korean_to_ueb}` and {} `{ueb_to_korean}`. Across all pending cases, \
-             the raw-to-residual counts after adding this cohort are {} -> {} for the target and \
-             {} -> {} for the reverse. No primary class is changed and no implementation result \
-             is inferred from the reference outputs at this diagnostic checkpoint.\n",
+             {} `comparison_method`, and {} `unsupported_character_review`. Of {} evaluable \
+             current mismatches, {} localize to the comma cell: {} `{korean_to_ueb}` and {} \
+             `{ueb_to_korean}`. The cohort gains 174 exact cases. Across all pending cases, the \
+             current raw-to-residual counts are {} -> {} for the target and {} -> {} for the \
+             reverse. The standard controls `9,375명`, `창세기 12,1-9`, and `근면, 검소, \
+             협동은 ...` retain their PDF cells. No primary class is changed by the cohort.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -5623,13 +5628,19 @@ fn markdown(report: &AnalysisReport) -> String {
              `⠐`; UEB 7 supplies `⠂` only while the comma remains inside English text. Requiring \
              Korean script in the right token is therefore the negative control against \
              reclassifying an English date or number sequence from surface punctuation alone.\n\n\
-             Before the shared rule-41 boundary correction, this cohort has {} candidates / {} \
-             exact / {} mismatch. Existing mismatch primaries remain {} \
-             `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, and {} \
-             `unsupported_character_review`. Of {} evaluable mismatches, {} have the comma-cell \
-             transition inside the independently encoded complete boundary signature: {} \
-             `{korean_to_ueb}` and {} `{ueb_to_korean}`. The detector and localizer do not read \
-             expected output to choose a route, and membership does not change a primary class.\n",
+             The diagnostic baseline was 58 candidates / 0 exact / 58 mismatch. Of those, 23 \
+             had `{korean_to_ueb}` at the comma inside the independently encoded complete \
+             boundary signature and none had the reverse. The same rule-41 correction removes \
+             the cross-token ASCII-letter lookup; rule 33 and the existing English-symbol route \
+             then choose the punctuation from the actual surrounding scripts.\n\n\
+             After the correction, this cohort has {} candidates / {} exact / {} mismatch. \
+             Existing mismatch primaries remain {} `pending_rule_review`, {} `corpus_suspect`, \
+             {} `comparison_method`, and {} `unsupported_character_review`. Of {} evaluable \
+             current mismatches, {} localize to the comma-cell signature: {} \
+             `{korean_to_ueb}` and {} `{ueb_to_korean}`. Three cases become exact. The official \
+             rule-33 `KTX, 새마을호` boundary and UEB prose comma remain independent standard \
+             controls. The detector and localizer do not read expected output to choose a route, \
+             and membership does not change a primary class.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -5669,14 +5680,18 @@ fn markdown(report: &AnalysisReport) -> String {
              explicitly defines `%p` as the percent-point unit. This cohort requires two \
              complete numeric `%p` tokens separated by comma plus whitespace, so rule 49's \
              ordinary Korean comma is the punctuation boundary; it does not infer arbitrary \
-             ASCII suffixes as units. At the diagnostic baseline it has {} candidates / {} \
-             exact / {} mismatch, preserving {} `pending_rule_review`, {} `corpus_suspect`, {} \
-             `comparison_method`, and {} `unsupported_character_review` mismatch primaries. Of \
-             {} evaluable mismatches, {} localize to the independently encoded complete unit \
-             pair: {} `{korean_to_ueb}` and {} `{ueb_to_korean}`. This scope audit was added \
-             after the exact-set comparison identified the common `%p, ... %p` structure; the \
-             engine still contains only the general rule-41 same-token boundary, not a `%p` \
-             special case.\n",
+             ASCII suffixes as units. The diagnostic baseline was 7 candidates / 0 exact / 7 \
+             mismatch, with one localized `{korean_to_ueb}` and no reverse.\n\n\
+             After the correction, this cohort has {} candidates / {} exact / {} mismatch, \
+             preserving {} `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, \
+             and {} `unsupported_character_review` mismatch primaries. Of {} evaluable current \
+             mismatches, {} localize to the independently encoded complete unit pair: {} \
+             `{korean_to_ueb}` and {} `{ueb_to_korean}`. Five cases become exact; the other two \
+             retain independent earlier differences. One of those five is also in the \
+             Roman-tail cohort, leaving four disjoint `%p` gains. Thus +174 in the numeric-list \
+             cohort, +3 in the Roman-tail cohort, and +4 disjoint here account for all +181 \
+             corpus exact gains, with zero exact-set regressions. The engine contains only the general \
+             rule-41 same-token boundary, not a `%p` special case.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -7149,7 +7164,7 @@ mod tests {
     }
 
     #[test]
-    fn localizes_pdf_spaced_numeric_list_comma_in_baseline_output() {
+    fn localizes_pdf_spaced_numeric_list_comma_after_rule41_fix() {
         // 2024 Korean-rules PDF physical p.209.
         let input = "제5열 버튼(3, 7 혹은 S)";
         let actual = braillify::encode_to_unicode(input).expect("numeric-list probe must encode");
@@ -7159,7 +7174,7 @@ mod tests {
         assert!(
             ranges
                 .iter()
-                .all(|range| actual.chars().nth(range.start) == Some('⠂'))
+                .all(|range| actual.chars().nth(range.start) == Some('⠐'))
         );
     }
 
