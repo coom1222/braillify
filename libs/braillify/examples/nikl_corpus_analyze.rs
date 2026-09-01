@@ -159,6 +159,7 @@ struct PendingRuleReviewClusterStats {
     output_signature_mismatches_evaluated: usize,
     first_difference_in_output_signature: usize,
     first_difference_in_output_signature_transitions: BTreeMap<String, usize>,
+    actual_output_signature_outcomes: BTreeMap<String, usize>,
     mismatch_primary_classes: BTreeMap<String, usize>,
     samples: BTreeMap<String, Vec<PendingRuleReviewClusterSample>>,
 }
@@ -577,6 +578,8 @@ const ALLCAPS_ROMAN_MIDDLE_DOT_RUNS: &str =
     "multi_character_allcaps_roman_runs_joined_by_middle_dot";
 const ROMAN_RUN_BEFORE_MIDDLE_DOT_BOUNDARY: &str =
     "roman_run_immediately_before_attached_middle_dot_boundary";
+const ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY: &str =
+    "attached_ascii_roman_to_korean_script_boundary";
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
@@ -2064,8 +2067,13 @@ fn first_difference_claimed_before_allcaps_ed(item: &EncodedCase) -> bool {
         || first_difference_in_roman_after_closed_enclosure(item)
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_attached_ascii_roman_to_korean(item: &EncodedCase) -> bool {
     first_difference_claimed_before_allcaps_ed(item) || first_difference_in_allcaps_ed_run(item)
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_attached_ascii_roman_to_korean(item)
+        || first_difference_at_attached_ascii_roman_to_korean_boundary(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -2326,6 +2334,152 @@ fn first_difference_at_roman_middle_dot_boundary(item: &EncodedCase) -> bool {
     roman_middle_dot_boundary_actual_ranges(&item.located.case.input, actual)
         .into_iter()
         .any(|range| range.contains(&first_difference))
+}
+
+/// Finds a maximal ASCII-letter run followed immediately by a Korean script
+/// character. This is deliberately only a script boundary: it does not infer
+/// whether the surrounding sentence is Korean- or Roman-dominant.
+fn attached_ascii_roman_to_korean_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    input
+        .char_indices()
+        .filter_map(|(korean_byte, korean)| {
+            if !is_korean_script(korean) || korean_byte == 0 {
+                return None;
+            }
+            let mut roman_start = korean_byte;
+            while roman_start > 0 && bytes[roman_start - 1].is_ascii_alphabetic() {
+                roman_start -= 1;
+            }
+            (roman_start < korean_byte).then_some(InputSpan {
+                start_byte: roman_start,
+                end_byte: korean_byte + korean.len_utf8(),
+            })
+        })
+        .collect()
+}
+
+/// Locates only the current mode marker at an attached Roman-to-Korean
+/// boundary. Encoding the real prefix establishes the cells before the
+/// boundary without consulting expected. The current full output can either
+/// retain rule 29's final Roman terminator or replace it with rule 39's
+/// two-cell Korean opening marker.
+fn attached_ascii_roman_to_korean_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    attached_ascii_roman_to_korean_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let korean_byte = input[span.start_byte..span.end_byte]
+                .char_indices()
+                .find_map(|(offset, ch)| {
+                    is_korean_script(ch).then_some(span.start_byte + offset)
+                })?;
+            let prefix = braillify::encode_to_unicode(&input[..korean_byte]).ok()?;
+            let prefix_cells = prefix.chars().collect::<Vec<_>>();
+            let terminator = prefix_cells.len().checked_sub(1)?;
+            if prefix_cells.get(terminator) != Some(&'⠲') {
+                return None;
+            }
+            if actual_cells.get(..prefix_cells.len()) == Some(prefix_cells.as_slice()) {
+                return Some((terminator, prefix_cells.len()));
+            }
+            if actual_cells.get(..terminator) == Some(&prefix_cells[..terminator])
+                && actual_cells.get(terminator..terminator + 2) == Some(&['⠸', '⠷'])
+            {
+                return Some((terminator, terminator + 2));
+            }
+            None
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(start, end)| start..end)
+        .collect()
+}
+
+fn first_difference_at_attached_ascii_roman_to_korean_boundary(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    attached_ascii_roman_to_korean_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
+fn record_attached_ascii_roman_to_korean_marker_outcomes(
+    stats: &mut PendingRuleReviewClusterStats,
+    item: &EncodedCase,
+    primary_key: &str,
+    reason_key: &str,
+    sample_limit: usize,
+) {
+    let Ok(actual) = &item.actual else {
+        return;
+    };
+    let ranges = attached_ascii_roman_to_korean_actual_ranges(&item.located.case.input, actual);
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let outcome = if primary_key == "exact" {
+        "exact"
+    } else {
+        "mismatch"
+    };
+    let mut seen = BTreeSet::new();
+    for range in ranges {
+        let Some(first) = actual_cells.get(range.start) else {
+            continue;
+        };
+        let marker = match first {
+            '⠲' => "rule29_terminator",
+            '⠸' => "rule39_hangul_opening",
+            _ => continue,
+        };
+        if !seen.insert(marker) {
+            continue;
+        }
+        *stats
+            .actual_output_signature_outcomes
+            .entry(format!("{outcome}:{marker}"))
+            .or_insert(0) += 1;
+
+        if outcome != "exact" {
+            continue;
+        }
+        let bucket = stats.samples.entry(format!("exact_{marker}")).or_default();
+        if bucket.len() >= sample_limit
+            || bucket
+                .iter()
+                .any(|existing| existing.shard == item.located.shard)
+        {
+            continue;
+        }
+        let start = range.start.saturating_sub(8);
+        let expected_excerpt = item
+            .located
+            .case
+            .unicode
+            .chars()
+            .skip(start)
+            .take(24)
+            .collect();
+        let actual_excerpt = actual.chars().skip(start).take(24).collect();
+        bucket.push(PendingRuleReviewClusterSample {
+            shard: item.located.shard.clone(),
+            index: item.located.index,
+            input: item.located.case.input.clone(),
+            expected_excerpt,
+            actual_excerpt,
+            first_difference_cell: None,
+            error: None,
+            primary_class: primary_key.to_string(),
+            reason: reason_key.to_string(),
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2728,6 +2882,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -2948,6 +3106,15 @@ fn analyze(
                 true,
             ),
             (
+                ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY,
+                !attached_ascii_roman_to_korean_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_attached_ascii_roman_to_korean(item)
+                        && first_difference_at_attached_ascii_roman_to_korean_boundary(item),
+                ),
+                true,
+            ),
+            (
                 KOREAN_PREFIXED_ALLCAPS_PARENTHETICAL,
                 has_korean_prefixed_allcaps_parenthetical(&item.located.case.input),
                 None,
@@ -3152,6 +3319,15 @@ fn analyze(
                 localized_first_difference,
                 localized_samples,
             );
+            if cluster == ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY {
+                record_attached_ascii_roman_to_korean_marker_outcomes(
+                    stats,
+                    item,
+                    &primary_key,
+                    &reason_key,
+                    sample_limit,
+                );
+            }
         }
 
         let mut suffix_spans = BTreeMap::<String, Vec<InputSpan>>::new();
@@ -3544,7 +3720,10 @@ fn markdown(report: &AnalysisReport) -> String {
          Korean character or ASCII-letter run after it, then searches for that whole \
          current-engine signature in the actual output. It therefore isolates the Roman \
          terminator boundary without treating unrelated middle dots elsewhere in the sentence \
-         as causal. The \
+         as causal. The `attached_ascii_roman_to_korean_script_boundary` gate requires an ASCII \
+         letter run immediately followed by Korean script and localizes only the current mode \
+         marker there: either rule 29's final `⠲` or rule 39's opening `⠸⠷`. It deliberately \
+         does not infer the dominant language of the sentence from that surface boundary. The \
          `korean_inline_parenthesized_single_arithmetic_operator` gate requires an immediate \
          `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
          traits, it also locates the current engine's emitted structure and counts a mismatch as \
@@ -4864,6 +5043,61 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(ATTACHED_ASCII_ROMAN_TO_KOREAN_BOUNDARY)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        let target = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2832 ⠲ -> U+2838 ⠸")
+            .copied()
+            .unwrap_or(0);
+        let reverse = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2838 ⠸ -> U+2832 ⠲")
+            .copied()
+            .unwrap_or(0);
+        let exact_terminator = stats
+            .actual_output_signature_outcomes
+            .get("exact:rule29_terminator")
+            .copied()
+            .unwrap_or(0);
+        let exact_hangul_opening = stats
+            .actual_output_signature_outcomes
+            .get("exact:rule39_hangul_opening")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent attached Roman-to-Korean boundary measurement: {} candidates, {} exact \
+             controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
+             subcluster, and {}/{} evaluable mismatches whose first difference is localized to \
+             the current boundary marker. The localized target `⠲ -> ⠸` occurs {target} times \
+             and the reverse `⠸ -> ⠲` occurs {reverse} times. Korean rule 29 (2024 Korean-rules \
+             PDF p.26, printed p.20) requires a Roman terminator around Roman text in a Korean \
+             sentence, whereas rule 39 (PDF pp.31-32, printed pp.25-26) applies the Korean \
+             opening/closing markers only when Roman text is the sentence's main \
+             language. Among exact candidates, {exact_terminator} expose the current rule-29 \
+             terminator at such a boundary and {exact_hangul_opening} expose the current rule-39 \
+             opening. Its printed controls include both an English sentence (`What is 김치 in \
+             English?`) and the address `www.대통령.kr` inside a Korean sentence. Official UEB \
+             2.4.7 (2024 UEB PDF p.41, printed p.13) confirms that a UEB mode does not extend \
+             through a switch to another braille code, but does not choose whether this Korean \
+             boundary belongs to a Korean-main or Roman-main context. Therefore the \
+             attached script boundary alone cannot distinguish ordinary Korean prose from an \
+             embedded Roman-domain context. Primary classes are preserved and no engine change \
+             is inferred without a narrower input-derived dominance gate.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(KOREAN_INLINE_PARENTHESIZED_OPERATOR)
     {
         let pending = stats
@@ -6151,6 +6385,38 @@ mod tests {
             assert_eq!(actual.chars().nth(range.start), Some('⠲'));
             assert!(range.end <= actual.chars().count());
         }
+    }
+
+    #[rstest::rstest]
+    #[case::acronym_annotation("FAA항공정보(NOTAMS)", vec!["FAA항"])]
+    #[case::mixed_case_word("e스포츠", vec!["e스"])]
+    #[case::domain_control("www.대통령.kr", vec![])]
+    #[case::spaced_pdf_control("What is 김치 in English?", vec![])]
+    fn detects_only_attached_roman_to_korean_boundaries(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = attached_ascii_roman_to_korean_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::current_rule39_opening("관련 FAA항공정보(NOTAMS)", '⠸', 2)]
+    #[case::current_rule29_terminator("종목 e스포츠", '⠲', 1)]
+    fn localizes_current_attached_roman_to_korean_marker(
+        #[case] input: &str,
+        #[case] first_marker: char,
+        #[case] marker_cells: usize,
+    ) {
+        let actual = braillify::encode_to_unicode(input).expect("boundary probe must encode");
+        let ranges = attached_ascii_roman_to_korean_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].end - ranges[0].start, marker_cells);
+        assert_eq!(actual.chars().nth(ranges[0].start), Some(first_marker));
     }
 
     #[rstest::rstest]
