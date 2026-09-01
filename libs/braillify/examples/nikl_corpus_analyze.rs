@@ -585,6 +585,7 @@ const KOREAN_MAJORITY_ROMAN_SANDWICH_NON_DOMAIN: &str =
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
+const ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING: &str = "attached_korean_auxiliary_itda_spacing";
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
 const ALLCAPS_ROMAN_RUN_CONTAINING_ST: &str = "allcaps_roman_run_containing_st";
 const ALLCAPS_ROMAN_RUN_CONTAINING_AR: &str = "allcaps_roman_run_containing_ar";
@@ -2612,6 +2613,7 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
         || first_difference_at_spaced_numeric_list_comma(item)
         || first_difference_at_ascii_roman_comma_before_digit_korean(item)
         || first_difference_at_percent_point_unit_list_comma(item)
+        || first_difference_at_attached_korean_auxiliary_itda_spacing(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3224,6 +3226,64 @@ fn first_difference_in_tight_triangle(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+/// Mirrors the existing token-normalization rule's narrow input shape: a
+/// whitespace-delimited Korean token ends in `있다` (optionally followed by a
+/// full stop) but contains no printed space before that suffix. Membership is
+/// descriptive; it does not decide whether orthography may override rule 49's
+/// instruction to follow print spacing.
+fn attached_korean_auxiliary_itda_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = Vec::new();
+    let mut word_start = 0usize;
+    for word in input.split_inclusive(char::is_whitespace) {
+        let body = word.trim_end_matches(char::is_whitespace);
+        let suffix = ["있다.", "있다"]
+            .into_iter()
+            .find(|suffix| body.ends_with(suffix));
+        if let Some(suffix) = suffix {
+            let suffix_start = body.len() - suffix.len();
+            let prefix = &body[..suffix_start];
+            if !prefix.is_empty() && prefix.chars().any(is_korean_script) {
+                spans.push(InputSpan {
+                    start_byte: word_start + suffix_start,
+                    end_byte: word_start + body.len(),
+                });
+            }
+        }
+        word_start += word.len();
+    }
+    spans
+}
+
+/// Locates only the blank currently inserted immediately before `있다`, using
+/// the real input prefix rather than any reference cell.
+fn attached_korean_auxiliary_itda_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    attached_korean_auxiliary_itda_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).ok()?;
+            let start = prefix.chars().count();
+            (actual_cells.get(start) == Some(&'⠀')).then_some(start..start + 1)
+        })
+        .collect()
+}
+
+fn first_difference_at_attached_korean_auxiliary_itda_spacing(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    attached_korean_auxiliary_itda_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn enum_key<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .expect("enum serialization must succeed")
@@ -3544,6 +3604,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             UPPERCASE_ROMAN_HEADWORD_EXPANSION.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3839,6 +3903,14 @@ fn analyze(
                 !tight_triangle_positions(&item.located.case.input).is_empty(),
                 Some(first_difference_in_tight_triangle(item)),
                 false,
+            ),
+            (
+                ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING,
+                !attached_korean_auxiliary_itda_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_at_attached_korean_auxiliary_itda_spacing(
+                    item,
+                )),
+                true,
             ),
             (
                 UPPERCASE_ROMAN_HEADWORD_EXPANSION,
@@ -4469,7 +4541,11 @@ fn markdown(report: &AnalysisReport) -> String {
          rule-33/34 punctuation cell in the localized signature, and does not infer new units. The \
          `tight_triangle_mark_immediately_before_korean` gate requires literal \
          `△한글` with no input space and includes the first following Korean cell in its localized \
-         output range, so an observed missing-space difference is measured at the mark boundary.\n\n",
+         output range, so an observed missing-space difference is measured at the mark boundary. \
+         The `attached_korean_auxiliary_itda_spacing` gate mirrors the current normalization \
+         shape for a Korean token ending in attached `있다`; its localizer independently encodes \
+         the real prefix and claims only the blank inserted before the suffix. It does not decide \
+         whether orthographic correction may override the printed input.\n\n",
     );
     text.push_str(
         "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
@@ -4944,8 +5020,8 @@ fn markdown(report: &AnalysisReport) -> String {
             primary_count("corpus_suspect"),
             primary_count("comparison_method"),
             primary_count("unsupported_character_review"),
-            stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
             localized_transition(target),
             localized_transition(reverse),
             localized_transition(open_to_space),
@@ -5703,6 +5779,57 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.first_difference_in_output_signature,
             localized_count(korean_to_ueb),
             localized_count(ueb_to_korean),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_count = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let expected_attached = "U+2815 ⠕ -> U+2800 ⠀";
+        let expected_spaced = "U+2800 ⠀ -> U+2815 ⠕";
+        let other_attached = "U+2823 ⠣ -> U+2800 ⠀";
+        text.push_str(&format!(
+            "\n### Attached Korean `있다` spacing normalization\n\n\
+             Korean rule 49 (2024 Korean-rules PDF p.37, printed p.31) says that spacing follows \
+             the print input. The PDF consistently retains an explicit space in `그리고 있다` \
+             (physical p.18), `살고 있다` (p.26), and `수강하고 있다` (p.30), but it gives no \
+             example authorizing a transcriber to insert a missing print space. The current \
+             token normalizer nevertheless splits any Korean token ending in attached `있다`.\n\n\
+             The diagnostic baseline has {} candidates / {} exact / {} mismatch, preserving {} \
+             `pending_rule_review`, {} `corpus_suspect`, {} `comparison_method`, and {} \
+             `unsupported_character_review` mismatch primaries. Of {} evaluable mismatches, {} \
+             put the first difference exactly at the independently located inserted blank: {} \
+             `{expected_attached}`, {} `{other_attached}`, and {} `{expected_spaced}`. There are \
+             no exact members and no localized reverse; the three explicitly spaced PDF forms \
+             are the independent negative controls. This checkpoint records the scope before \
+             testing removal of the input-correcting normalizer; it does not infer a branch from \
+             the corpus reference.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_count(expected_attached),
+            localized_count(other_attached),
+            localized_count(expected_spaced),
         ));
     }
     if let Some(stats) = report
@@ -7830,6 +7957,31 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
         assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::corpus_attached_suffix("성장을 하고있다.", vec!["있다."])]
+    #[case::pdf_printed_space("그림을 그리고 있다.", vec![])]
+    #[case::independent_suffix("있다.", vec![])]
+    fn detects_only_attached_korean_auxiliary_itda(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = attached_korean_auxiliary_itda_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn localizes_current_inserted_blank_before_attached_itda() {
+        let input = "성장을 하고있다.";
+        let actual = braillify::encode_to_unicode(input).expect("spacing probe must encode");
+        let ranges = attached_korean_auxiliary_itda_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠀'));
     }
 
     #[test]
