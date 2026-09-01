@@ -916,6 +916,7 @@ mod tests {
     #[case::digit_in_final_fragment("(Romeo Juliet2)", false)]
     #[case::digit_after_opening("(2Romeo Juliet)", false)]
     #[case::digit_in_earlier_fragment("(Romeo2 Juliet)", false)]
+    #[case::nonletter_earlier_without_opening("Romeo2 Juliet More)", false)]
     fn recognizes_only_complete_multiword_roman_parenthetical_tails(
         #[case] input: &str,
         #[case] expected: bool,

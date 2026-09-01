@@ -3438,8 +3438,7 @@ fn first_difference_at_attached_korean_auxiliary_itda_spacing(item: &EncodedCase
     }
     let first_difference = first_difference_cell(&item.located.case.unicode, actual);
     attached_korean_auxiliary_itda_actual_ranges(&item.located.case.input, actual)
-        .into_iter()
-        .any(|range| range.contains(&first_difference))
+        .contains(&(first_difference..first_difference + 1))
 }
 
 fn enum_key<T: Serialize>(value: &T) -> String {
