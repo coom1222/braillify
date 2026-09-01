@@ -2288,12 +2288,44 @@ fn roman_run_before_middle_dot_boundary_spans(input: &str) -> Vec<InputSpan> {
     spans
 }
 
+/// Locates only the current terminator immediately before an attached middle
+/// dot by encoding the real input prefix ending at that boundary. This keeps
+/// hyphen/identifier state such as `K-ICS·...` without consulting expected.
+fn roman_middle_dot_boundary_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    roman_run_before_middle_dot_boundary_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let middle_dot_offset = input[span.start_byte..span.end_byte].find('·')?;
+            let middle_dot_byte = span.start_byte + middle_dot_offset;
+            let prefix = braillify::encode_to_unicode(&input[..middle_dot_byte]).ok()?;
+            if !actual.starts_with(&prefix) {
+                return None;
+            }
+            let end = prefix.chars().count();
+            let start = end.checked_sub(1)?;
+            (actual_cells.get(start) == Some(&'⠲')).then_some((start, end))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(start, end)| start..end)
+        .collect()
+}
+
 fn first_difference_at_roman_middle_dot_boundary(item: &EncodedCase) -> bool {
-    first_difference_in_korean_context_signature_spans(
-        item,
-        &roman_run_before_middle_dot_boundary_spans(&item.located.case.input),
-        0,
-    )
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    roman_middle_dot_boundary_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4816,9 +4848,13 @@ fn markdown(report: &AnalysisReport) -> String {
             "\nCurrent Roman-before-middle-dot boundary measurement: {} candidates, {} exact \
              controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
              subcluster, and {}/{} evaluable mismatches whose first difference is localized to \
-             the attached Roman/middle-dot output signature. Rules 29, 33, and 50 support the \
-             current terminator path but do not support the localized reference omission; no \
-             engine change or primary-class rewrite is inferred.\n",
+             the one current terminator immediately before the middle dot. The locator encodes \
+             each real input prefix ending at the dot, so identifier state such as `K-ICS·...` \
+             is retained without consulting expected. This raises localized target coverage from \
+             342 to 417 and reduces the then-leading residual `⠐ -> ⠲` transition from 297 to \
+             223. Rules 29, 33, and 50 support the current terminator path but do not support the \
+             localized reference omission; no engine change or primary-class rewrite is \
+             inferred.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -6099,21 +6135,22 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::roman_korean("신작 PC·모바일")]
-    #[case::roman_roman("AI·SW교육")]
-    #[case::mixed_case("기관(Fed·연준)")]
-    fn localizes_roman_middle_dot_boundary_in_complete_output(#[case] input: &str) {
+    #[case::roman_korean("신작 PC·모바일", true)]
+    #[case::multi_letter_roman_continuation("AI·SW교육", false)]
+    #[case::mixed_case("기관(Fed·연준)", true)]
+    fn localizes_only_current_terminator_before_middle_dot(
+        #[case] input: &str,
+        #[case] expected_terminator: bool,
+    ) {
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
-        let ranges = korean_context_signature_ranges(
-            input,
-            &actual,
-            &roman_run_before_middle_dot_boundary_spans(input),
-            0,
-        );
+        let ranges = roman_middle_dot_boundary_actual_ranges(input, &actual);
 
-        assert_eq!(ranges.len(), 1);
-        assert!(ranges[0].start < ranges[0].end);
-        assert!(ranges[0].end <= actual.chars().count());
+        assert_eq!(ranges.len(), usize::from(expected_terminator));
+        if let Some(range) = ranges.first() {
+            assert_eq!(range.end - range.start, 1);
+            assert_eq!(actual.chars().nth(range.start), Some('⠲'));
+            assert!(range.end <= actual.chars().count());
+        }
     }
 
     #[rstest::rstest]
