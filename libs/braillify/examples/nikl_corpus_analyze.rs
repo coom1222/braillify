@@ -619,6 +619,8 @@ const KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX: &str =
     "korean_prefixed_roman_parenthetical_followed_by_allcaps_hyphen_suffix";
 const CONSECUTIVE_ROMAN_UPPERCASE_WORD_REENTRY: &str =
     "uppercase_word_after_whitespace_continuing_ascii_roman_text";
+const CONSECUTIVE_ASCII_ROMAN_WORD_BOUNDARY: &str =
+    "consecutive_ascii_roman_words_whitespace_boundary";
 const ROMAN_PARENTHETICAL_AFTER_NONLETTER_BOUNDARY: &str =
     "closed_roman_parenthetical_after_non_ascii_letter_boundary";
 
@@ -1426,6 +1428,111 @@ fn consecutive_roman_uppercase_word_spans(input: &str) -> Vec<InputSpan> {
     spans
 }
 
+/// Finds adjacent ASCII-letter words separated only by one or more whitespace
+/// characters. The gate is deliberately indifferent to capitalization and
+/// lexical meaning; rule 29's official `Los Angeles` and `Table of Contents`
+/// are exact controls for this structural boundary.
+fn consecutive_ascii_roman_word_boundary_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic()
+            || input[..cursor]
+                .chars()
+                .next_back()
+                .is_some_and(|previous| previous.is_ascii_alphanumeric())
+        {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+        let start_byte = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+            cursor += 1;
+        }
+        let whitespace_start = cursor;
+        while input[cursor..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("whitespace cursor must remain valid")
+                .len_utf8();
+        }
+        if cursor == whitespace_start || !bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+            cursor = whitespace_start.max(start_byte + 1);
+            continue;
+        }
+        while bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+            cursor += 1;
+        }
+        spans.push(InputSpan {
+            start_byte,
+            end_byte: cursor,
+        });
+        cursor = whitespace_start;
+    }
+    spans
+}
+
+/// Locates only the current cell at a consecutive-Roman whitespace boundary.
+/// A real input prefix ending after the first word normally ends in rule 29's
+/// terminator. The complete output either retains that cell (the suspected
+/// premature exit) or replaces its position with the printed whitespace.
+fn consecutive_ascii_roman_boundary_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    consecutive_ascii_roman_word_boundary_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let boundary_offset = input[span.start_byte..span.end_byte]
+                .char_indices()
+                .find_map(|(offset, ch)| ch.is_whitespace().then_some(offset))?;
+            let boundary_byte = span.start_byte + boundary_offset;
+            let prefix = braillify::encode_to_unicode(&input[..boundary_byte]).ok()?;
+            let prefix_cells = prefix.chars().collect::<Vec<_>>();
+            let boundary = prefix_cells.len().checked_sub(1)?;
+            if prefix_cells.get(boundary) != Some(&'⠲') {
+                return None;
+            }
+            if actual_cells.get(..prefix_cells.len()) == Some(prefix_cells.as_slice()) {
+                return Some((boundary, boundary + 1));
+            }
+            if actual_cells.get(..boundary) == Some(&prefix_cells[..boundary])
+                && actual_cells.get(boundary) == Some(&'⠀')
+            {
+                return Some((boundary, boundary + 1));
+            }
+            None
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(start, end)| start..end)
+        .collect()
+}
+
+fn first_difference_at_consecutive_ascii_roman_word_boundary(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    consecutive_ascii_roman_boundary_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 /// Finds a closed, non-nested parenthetical whose body starts with a Roman
 /// letter and whose opening does not immediately follow another ASCII letter.
 /// This includes rule-34 enclosure contexts after Korean, digits, whitespace,
@@ -2156,13 +2263,18 @@ fn first_difference_claimed_before_uppercase_alphanumeric_roman_digit(item: &Enc
         || first_difference_at_attached_ascii_roman_to_korean_boundary(item)
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_consecutive_ascii_roman_boundary(item: &EncodedCase) -> bool {
     first_difference_claimed_before_uppercase_alphanumeric_roman_digit(item)
         || first_difference_at_input_span_entry(
             item,
             &uppercase_alphanumeric_roman_digit_spans(&item.located.case.input),
             2,
         )
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_consecutive_ascii_roman_boundary(item)
+        || first_difference_at_consecutive_ascii_roman_word_boundary(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3123,6 +3235,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            CONSECUTIVE_ASCII_ROMAN_WORD_BOUNDARY.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ROMAN_PARENTHETICAL_AFTER_NONLETTER_BOUNDARY.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3474,6 +3590,15 @@ fn analyze(
                             item,
                             &consecutive_roman_uppercase_word_spans(&item.located.case.input),
                         ),
+                ),
+                true,
+            ),
+            (
+                CONSECUTIVE_ASCII_ROMAN_WORD_BOUNDARY,
+                !consecutive_ascii_roman_word_boundary_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_consecutive_ascii_roman_boundary(item)
+                        && first_difference_at_consecutive_ascii_roman_word_boundary(item),
                 ),
                 true,
             ),
@@ -3936,6 +4061,12 @@ fn markdown(report: &AnalysisReport) -> String {
          segments joined directly by `&`, excludes spaced/Korean/alphanumeric continuations, and \
          localizes only the current output cell immediately before the ampersand through an \
          independently encoded real-input prefix. The \
+         `consecutive_ascii_roman_words_whitespace_boundary` gate requires two adjacent \
+         ASCII-letter words separated only by whitespace. For each boundary it independently \
+         encodes the real input prefix ending after the first word, then localizes only the \
+         current rule-29 terminator at that position or the full output's replacing blank. This \
+         prevents an unrelated Roman occurrence elsewhere in the sentence from satisfying the \
+         audit. Slash and other punctuation-separated forms are deliberately excluded. The \
          `decimal_point_between_ascii_digits` gate finds \
          whitespace-delimited words containing `digit.digit` and reproduces each whole word in a \
          neutral Korean context, so suffixes and punctuation remain part of the current-engine \
@@ -4955,6 +5086,61 @@ fn markdown(report: &AnalysisReport) -> String {
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
+        .get(CONSECUTIVE_ASCII_ROMAN_WORD_BOUNDARY)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        let target = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2800 ⠀ -> U+2832 ⠲")
+            .copied()
+            .unwrap_or(0);
+        let reverse = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2832 ⠲ -> U+2800 ⠀")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent consecutive ASCII-Roman word-boundary measurement: {} candidates, {} \
+             exact controls, {} mismatches, {pending} members in the actual \
+             `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose first \
+             difference is localized to the current boundary cell. The target reference blank \
+             versus current terminator (`⠀ -> ⠲`) occurs {target} times; the exact reverse \
+             (`⠲ -> ⠀`) occurs {reverse} times. Korean rule 29 (2024 Korean-rules PDF p.26, \
+             printed p.20) explicitly treats consecutive Roman items as one Roman section, with \
+             one Roman indicator before the first item and one terminator after the last; its \
+             printed `Los Angeles` and `Table of Contents` examples are exact controls. Rule 34 \
+             (PDF p.29, printed p.23) separately omits the terminator before a closing enclosure, \
+             while official UEB 9.7.1 (2024 UEB PDF p.137, printed p.109) prints the multiword \
+             prose enclosure `plays (such as Romeo and Juliet)` with ordinary internal spaces \
+             and nested closing punctuation. Together they support preserving a complete \
+             letter-and-space Roman parenthetical as prose, but not a fragment containing a \
+             function-call opener, digit, operator, or nested bracket. The input-only gate does not decide \
+             whether punctuation-separated text such as `ESS /VPP` continues the same section, \
+             so that variant remains outside this cohort. Primary classes are preserved. Before \
+             the narrow token-routing change this cohort was 4,679 candidates / 2,058 exact / \
+             2,621 mismatch, with 128 localized `⠀ -> ⠲` and zero reverse. The cause was the \
+             final `Letters)` token of a whitespace-split Roman parenthetical being rerouted as \
+             math, which made the preceding Roman word terminate early and introduced an extra \
+             blank. After excluding only a backwards-verified complete Roman parenthetical tail \
+             from math routing, the cohort is 2,132 exact / 2,547 mismatch, with 23 target-localized \
+             and zero reverse; corpus-wide exact likewise rises by 74, from 68,101 to 68,175. \
+             The 105 removed localized boundaries include 74 newly exact cases and 31 cases that \
+             still differ elsewhere. Remaining targets such as `SYNO PEM-1`, `ACE Fair(2020)`, \
+             and `Mnet K-POP` do not satisfy the complete-parenthetical gate and remain separate \
+             residuals rather than widening this rule.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
         .get(SINGLE_CAPITAL_PARENTHESIZED_DIGITS)
     {
         let pending = stats
@@ -5676,7 +5862,8 @@ fn markdown(report: &AnalysisReport) -> String {
          | UEB complete all-caps segments across hyphen | 5,141/5,141 | 67,138/83,528 | 80.38% | The grade-1 restart is omitted only between a complete uppercase prefix and an uppercase suffix of at least two letters; mixed/single-capital and digit-hyphen controls remain unchanged |\n\
          | Rule-29 consecutive Roman entry idempotence | 5,141/5,141 | 67,442/83,528 | 80.74% | An explicit Roman-entry event is ignored only when final emit state is already inside the same Roman section |\n\
          | Rules 29/71 complete attached Roman ampersand run | 5,141/5,141 | 67,715/83,528 | 81.07% | Complete ASCII-letter segments joined by `&` retain one Roman section; official `AT&T`, `B&B`, and spaced Korean Rule-71 controls delimit the safe boundary; 273 cases became exact |\n\
-         | Rules 29/39 Roman-to-Korean mode ownership | 5,141/5,141 | 68,101/83,528 | 81.53% | Same-token Korean is wrapped only in a Roman-majority document or the official dot-delimited `www.대통령.kr` domain shape; all three rule-39 PDF controls remain exact and 386 corpus cases became exact |\n",
+         | Rules 29/39 Roman-to-Korean mode ownership | 5,141/5,141 | 68,101/83,528 | 81.53% | Same-token Korean is wrapped only in a Roman-majority document or the official dot-delimited `www.대통령.kr` domain shape; all three rule-39 PDF controls remain exact and 386 corpus cases became exact |\n\
+         | Rules 29/34 multiword Roman parenthetical continuity | 5,141/5,141 | 68,175/83,528 | 81.62% | A backwards-verified, closed letter-and-space Roman parenthetical tail stays on the prose route; function calls, digits, operators, nested brackets, and punctuation-separated forms remain outside; 74 cases became exact |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
@@ -6381,6 +6568,58 @@ mod tests {
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::pdf_los_angeles(
+        "그녀는 Los Angeles의 한인 타운에 살고 있다.",
+        vec!["Los Angeles"]
+    )]
+    #[case::pdf_table_of_contents(
+        "Table of Contents",
+        vec!["Table of", "of Contents"]
+    )]
+    #[case::parenthesized_name("(Max Anderson)", vec!["Max Anderson"])]
+    #[case::allcaps_pair("(EU CSRD)", vec!["EU CSRD"])]
+    #[case::slash_separated("ESS /VPP", vec![])]
+    #[case::korean_words("한인 타운", vec![])]
+    fn detects_consecutive_ascii_roman_word_boundaries(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = consecutive_ascii_roman_word_boundary_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::pdf_rule_29("그녀는 Los Angeles의 한인 타운에 살고 있다.", vec!['⠀'])]
+    #[case::corpus_parenthesized_name(
+        "LCK 글로벌 중계진은 지난 해와 마찬가지로 ‘아틀러스(Atlus)’ 맥스 앤더슨(Max Anderson), ‘발데스(Valdes)’ 브랜든 발데스(Brendan Valdes), ‘울프(Wolf)’ 울프 슈뢰더(Wolf Schroeder)와 ‘크로니클러(Chronicler)’ 모리츠 뮈센(Maurits Meeusen)이",
+        vec!['⠀', '⠀', '⠀', '⠀']
+    )]
+    fn locates_current_consecutive_ascii_roman_boundary_cell(
+        #[case] input: &str,
+        #[case] expected_markers: Vec<char>,
+    ) {
+        let actual = braillify::encode_to_unicode(input).expect("Roman boundary probe must encode");
+        let ranges = consecutive_ascii_roman_boundary_actual_ranges(input, &actual);
+        let markers = ranges
+            .iter()
+            .map(|range| {
+                actual
+                    .chars()
+                    .nth(range.start)
+                    .expect("localized boundary must exist")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            markers, expected_markers,
+            "the locator must identify each occurrence-specific current boundary"
+        );
     }
 
     #[rstest::rstest]

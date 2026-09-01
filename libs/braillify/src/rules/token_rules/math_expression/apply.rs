@@ -144,6 +144,64 @@ fn prev_word_is_math_product_cue(tokens: &[Token<'_>], index: usize) -> bool {
         .is_some_and(|word| word.text.as_ref() == "곱")
 }
 
+/// Returns true when `word` is the final fragment of a whitespace-split,
+/// closed Roman parenthetical whose earlier fragments contain letters only.
+///
+/// Korean rules 29 and 34 keep consecutive Roman words in one Roman section
+/// and omit its terminator before the closing parenthesis. UEB 9.7.1 likewise
+/// prints multiword prose inside one paired parenthesis. The token parser keeps
+/// the spaces as separate tokens, so the final `Letters)` fragment must not be
+/// mistaken for a standalone mathematical expression merely because it has a
+/// closing bracket. An ASCII letter immediately before the opening parenthesis
+/// is excluded so function-call syntax such as `f(x)` remains math-owned.
+fn is_multiword_closed_roman_parenthetical_tail(
+    tokens: &[Token<'_>],
+    index: usize,
+    word: &WordToken<'_>,
+) -> bool {
+    let Some(close) = word.chars.iter().position(|ch| *ch == ')') else {
+        return false;
+    };
+    let body = &word.chars[..close];
+    let trailing = &word.chars[close + 1..];
+    if body.is_empty()
+        || !body.iter().all(char::is_ascii_alphabetic)
+        || !trailing
+            .iter()
+            .all(|ch| matches!(*ch, ',' | '.' | ';' | ':' | '!' | '?' | '\'' | '"'))
+    {
+        return false;
+    }
+
+    let mut cursor = index.checked_sub(1);
+    while let Some(i) = cursor {
+        match tokens.get(i) {
+            Some(Token::Space(_)) => cursor = i.checked_sub(1),
+            Some(Token::Word(previous)) => {
+                let previous_text = previous.text.as_ref();
+                if let Some(open) = previous_text.rfind('(') {
+                    let before = &previous_text[..open];
+                    let after = &previous_text[open + 1..];
+                    return !after.is_empty()
+                        && after.chars().all(|ch| ch.is_ascii_alphabetic())
+                        && !before
+                            .chars()
+                            .next_back()
+                            .is_some_and(|ch| ch.is_ascii_alphabetic())
+                        && !before.chars().any(|ch| matches!(ch, '(' | ')'));
+                }
+                if previous_text.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                    cursor = i.checked_sub(1);
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Walks backward from `index - 1`, skipping `Space`, returning whether the
 /// preceding content is a math-letter Word or a math-context PreEncoded.
 fn prev_is_math_context_for_ellipsis(tokens: &[Token<'_>], index: usize) -> bool {
@@ -286,6 +344,10 @@ pub(super) fn run<'a>(
     };
 
     let text = word.text.as_ref();
+
+    if is_multiword_closed_roman_parenthetical_tail(tokens, index, word) {
+        return Ok(TokenAction::Noop);
+    }
 
     // PDF 수학 제60/61항 — `a ≲ b:`, `p ⊻ q:` 같이 단일 letter + 관계기호 + 단일
     // letter + 콜론 패턴의 inline math expression. 콜론 이전까지를 하나의 math
@@ -837,6 +899,32 @@ pub(super) fn run<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rstest::rstest]
+    #[case::ueb_multiword_parenthetical("plays (such as Romeo and Juliet)", true)]
+    #[case::ueb_letter_list("(q, r)", false)]
+    #[case::math_function("f(x)", false)]
+    #[case::operator_interrupts_prose_run("(x + y)", false)]
+    fn recognizes_only_complete_multiword_roman_parenthetical_tails(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        let ir = crate::rules::token::DocumentIR::parse(input, true);
+        let index = ir
+            .tokens
+            .iter()
+            .rposition(|token| matches!(token, Token::Word(_)))
+            .expect("probe must contain a word");
+        let Token::Word(word) = &ir.tokens[index] else {
+            unreachable!("selected token must be a word");
+        };
+
+        assert_eq!(
+            is_multiword_closed_roman_parenthetical_tail(&ir.tokens, index, word),
+            expected
+        );
+    }
+
     use crate::rules::token::{SpaceKind, WordMeta, WordToken};
     use std::borrow::Cow;
 
