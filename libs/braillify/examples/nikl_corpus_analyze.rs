@@ -582,6 +582,8 @@ const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
 const ALLCAPS_ROMAN_RUN_CONTAINING_ST: &str = "allcaps_roman_run_containing_st";
+const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
+    "attached_ascii_roman_segments_joined_by_ampersand";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
@@ -948,6 +950,52 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
 
 fn allcaps_roman_runs_containing_st(input: &str) -> Vec<InputSpan> {
     allcaps_roman_runs_containing_pair(input, b"ST")
+}
+
+/// Finds complete ASCII-letter sequences joined directly by one or more
+/// ampersands, such as the UEB §3.1.1 examples `AT&T` and `B&B`. Whitespace,
+/// Korean text, empty segments, and alphanumeric outer continuations are
+/// excluded so the cohort is an attached Roman-symbol boundary, not broad
+/// sentence-level ampersand coexistence.
+fn attached_ascii_roman_ampersand_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !bytes[cursor].is_ascii_alphabetic() {
+            cursor += input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor must remain on a character boundary")
+                .len_utf8();
+            continue;
+        }
+
+        let start_byte = cursor;
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'&')
+        {
+            cursor += 1;
+        }
+        let end_byte = cursor;
+        let run = &input[start_byte..end_byte];
+        let previous = input[..start_byte].chars().next_back();
+        let next = input[end_byte..].chars().next();
+        if run.contains('&')
+            && run.split('&').all(|segment| {
+                !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_alphabetic())
+            })
+            && previous.is_none_or(|ch| !ch.is_ascii_alphanumeric())
+            && next.is_none_or(|ch| !ch.is_ascii_alphanumeric())
+        {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte,
+            });
+        }
+    }
+    spans
 }
 
 /// Finds maximal pure-uppercase ASCII letter runs whose beginning is itself a
@@ -1567,6 +1615,41 @@ fn first_difference_in_allcaps_st_run(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn attached_roman_ampersand_boundary_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let mut ranges = BTreeSet::new();
+    for span in attached_ascii_roman_ampersand_spans(input) {
+        for (offset, _) in input[span.start_byte..span.end_byte].match_indices('&') {
+            let ampersand_byte = span.start_byte + offset;
+            let Ok(prefix) = braillify::encode_to_unicode(&input[..ampersand_byte]) else {
+                continue;
+            };
+            let prefix_cells = prefix.chars().collect::<Vec<_>>();
+            if actual_cells.starts_with(&prefix_cells) && !prefix_cells.is_empty() {
+                let boundary = prefix_cells.len() - 1;
+                ranges.insert((boundary, boundary + 1));
+            }
+        }
+    }
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+fn first_difference_in_attached_roman_ampersand(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    attached_roman_ampersand_boundary_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 /// Finds a standalone single capital immediately followed by a non-empty,
 /// closed ASCII-digit parenthetical, such as `A(14)`. The span is deliberately
 /// semantic-neutral: prose labels and mathematical function notation can share
@@ -1799,8 +1882,13 @@ fn first_difference_claimed_before_allcaps_st(item: &EncodedCase) -> bool {
         )
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_attached_roman_ampersand(item: &EncodedCase) -> bool {
     first_difference_claimed_before_allcaps_st(item) || first_difference_in_allcaps_st_run(item)
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_attached_roman_ampersand(item)
+        || first_difference_in_attached_roman_ampersand(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -2407,6 +2495,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -2583,6 +2675,15 @@ fn analyze(
                 Some(
                     !first_difference_claimed_before_allcaps_st(item)
                         && first_difference_in_allcaps_st_run(item),
+                ),
+                true,
+            ),
+            (
+                ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND,
+                !attached_ascii_roman_ampersand_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_attached_roman_ampersand(item)
+                        && first_difference_in_attached_roman_ampersand(item),
                 ),
                 true,
             ),
@@ -3206,6 +3307,10 @@ fn markdown(report: &AnalysisReport) -> String {
          signature as localized. The `allcaps_roman_run_containing_st` gate applies the same \
          output-position requirement to adjacent `ST`; it is kept separate because UEB 10.12 \
          makes contraction use depend on how an abbreviation or acronym is pronounced. The \
+         `attached_ascii_roman_segments_joined_by_ampersand` gate requires non-empty ASCII-letter \
+         segments joined directly by `&`, excludes spaced/Korean/alphanumeric continuations, and \
+         localizes only the current output cell immediately before the ampersand through an \
+         independently encoded real-input prefix. The \
          `decimal_point_between_ascii_digits` gate finds \
          whitespace-delimited words containing `digit.digit` and reproduces each whole word in a \
          neutral Korean context, so suffixes and punctuation remain part of the current-engine \
@@ -3866,6 +3971,75 @@ fn markdown(report: &AnalysisReport) -> String {
             residual_transition(target),
             raw_transition(reverse),
             residual_transition(reverse),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let transition_count = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let raw_count = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let residual_count = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let target = "U+2808 ⠈ -> U+2832 ⠲";
+        let reverse = "U+2832 ⠲ -> U+2808 ⠈";
+        text.push_str(&format!(
+            "\n### Attached Roman segments joined by ampersand\n\n\
+             UEB 3.1.1 (2024 UEB PDF p.51, printed p.23) directly prints `AT&T` and \
+             `B&B` with the attached ampersand `⠈⠯` and no mode boundary around it. Korean \
+             rule 71 (2024 Korean-rules PDF p.51, printed p.45) assigns the same `⠈⠯` \
+             cells, while rule 29 places Roman entry before a Roman section and termination after \
+             its last item. The current Korean-context path instead exits before `&`, wraps the \
+             information symbol as a separate Roman section, and re-enters for the following \
+             letters.\n\n\
+             The baseline cohort contains {} candidates, {} corpus-exact members, and {} \
+             mismatches. Existing primary classes are preserved: {} `pending_rule_review`, {} \
+             `corpus_suspect`, and {} `unsupported_character_review`. The real-prefix output \
+             localizer evaluates all {} mismatches but assigns only the single cell immediately \
+             before `&`; {} are localized and all {} are `{target}`. The raw-to-residual target \
+             count is {} -> {}; `{reverse}` is {} raw / {} residual. Official full-encoder \
+             controls `AT&T` and `B&B` pass, while spaced `Marks & Spencer`, Korean `가&나`, empty \
+             segments, and alphanumeric continuations are excluded controls. With no corpus exact \
+             member, no reverse transition, and direct matching rules in both standards, this is a \
+             high-confidence general implementation candidate rather than an expected-derived \
+             branch. Representative shard/index samples are retained above.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            transition_count(target),
+            raw_count(target),
+            residual_count(target),
+            raw_count(reverse),
+            residual_count(reverse),
         ));
     }
     if let Some(stats) = report
@@ -4955,6 +5129,35 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::common_initialisms("M&A P&G R&D", vec!["M&A", "P&G", "R&D"])]
+    #[case::ueb_examples("AT&T B&B", vec!["AT&T", "B&B"])]
+    #[case::multiple_ampersands("A&B&C", vec!["A&B&C"])]
+    #[case::spaced_symbol("Marks & Spencer", vec![])]
+    #[case::korean_segments("가&나", vec![])]
+    #[case::empty_segment("A&&B", vec![])]
+    #[case::digit_continuation("R&D2", vec![])]
+    fn detects_attached_ascii_roman_ampersand_spans(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = attached_ascii_roman_ampersand_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::at_and_t("AT&T", "⠠⠠⠁⠞⠈⠯⠠⠞")]
+    #[case::b_and_b("B&B", "⠠⠃⠈⠯⠠⠃")]
+    fn full_encoder_matches_ueb_3_1_1_ampersand_examples(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(braillify::encode_to_unicode(input).as_deref(), Ok(expected));
+    }
+
+    #[rstest::rstest]
     #[case::whole_shortform("가(WD) 나", vec!["WD"])]
     #[case::longer_prefixes("PDS LLM GDP", vec!["PDS", "LLM", "GDP"])]
     #[case::ueb_examples("ALT NEC LLC", vec!["ALT", "NEC", "LLC"])]
@@ -5196,6 +5399,20 @@ mod tests {
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::merger("인수·합병(M&A) 시장")]
+    #[case::brand("브랜드(P&G) 편입")]
+    #[case::research("연구·개발(R&D)을 추진")]
+    fn locates_attached_roman_ampersand_in_korean_output(#[case] input: &str) {
+        let actual = braillify::encode_to_unicode(input).expect("ampersand probe must encode");
+        let ranges = attached_roman_ampersand_boundary_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].end - ranges[0].start, 1);
+        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠲'));
         assert!(ranges[0].end <= actual.chars().count());
     }
 
