@@ -4013,26 +4013,40 @@ fn markdown(report: &AnalysisReport) -> String {
              `B&B` with the attached ampersand `⠈⠯` and no mode boundary around it. Korean \
              rule 71 (2024 Korean-rules PDF p.51, printed p.45) assigns the same `⠈⠯` \
              cells, while rule 29 places Roman entry before a Roman section and termination after \
-             its last item. The current Korean-context path instead exits before `&`, wraps the \
-             information symbol as a separate Roman section, and re-enters for the following \
-             letters.\n\n\
-             The baseline cohort contains {} candidates, {} corpus-exact members, and {} \
-             mismatches. Existing primary classes are preserved: {} `pending_rule_review`, {} \
-             `corpus_suspect`, and {} `unsupported_character_review`. The real-prefix output \
-             localizer evaluates all {} mismatches but assigns only the single cell immediately \
-             before `&`; {} are localized and all {} are `{target}`. The raw-to-residual target \
-             count is {} -> {}; `{reverse}` is {} raw / {} residual. Official full-encoder \
-             controls `AT&T` and `B&B` pass, while spaced `Marks & Spencer`, Korean `가&나`, empty \
-             segments, and alphanumeric continuations are excluded controls. With no corpus exact \
-             member, no reverse transition, and direct matching rules in both standards, this is a \
-             high-confidence general implementation candidate rather than an expected-derived \
-             branch. Representative shard/index samples are retained above.\n",
+             its last item. Before the engine change, the Korean-context path instead exited before \
+             `&`, wrapped the information symbol as a separate Roman section, and re-entered for \
+             the following letters.\n\n\
+             The baseline was 802 candidates / 0 exact / 802 mismatch, preserving 776 \
+             `pending_rule_review`, 10 `corpus_suspect`, and 16 \
+             `unsupported_character_review` primary classifications. Its real-prefix localizer \
+             assigned only the output cell immediately before `&`: 356/802 mismatches localized, \
+             all 356 were `{target}`, the raw-to-residual target count was 411 -> 53, and \
+             `{reverse}` was 0 raw / 0 residual.\n\n\
+             The implemented gate shares the analyzer's complete-run predicate: one or more \
+             non-empty ASCII-letter segments joined directly by `&`, with non-alphanumeric outer \
+             boundaries. It keeps the existing Roman mode open and suppresses only rule 71's \
+             redundant wrapper around that ampersand. Spaced `Marks & Spencer`, Korean `가&나`, \
+             empty segments, and outer digit continuations remain outside the gate. Official \
+             full-encoder controls `AT&T` and `B&B` pass, and the Korean rule-71 spaced example \
+             `종이접기 & 클레이아트` retains its independent `⠴⠈⠯⠲` section.\n\n\
+             After the change the same cohort contains {} candidates, {} exact and {} mismatch. \
+             Current mismatch primary classes remain evaluator-owned: {} `pending_rule_review`, {} \
+             `corpus_suspect`, {} `unsupported_character_review`, and {} `comparison_method`. The \
+             localizer evaluates all {} remaining mismatches and finds {} target-localized cases \
+             ({} `{target}`); current raw-to-residual target count is {} -> {}, while `{reverse}` \
+             remains {} raw / {} residual. Cohort exact increases by 273 and corpus-wide exact \
+             increases by the same 273, from 67,442 to 67,715. Because every changed input must \
+             satisfy this shared predicate and the baseline had no exact member, this boundary has \
+             no exact regression. The remaining 529 candidates differ elsewhere or retain an \
+             existing comparison, corpus-suspect, unsupported, or pending cause. Representative \
+             shard/index samples are retained above.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
             primary_count("pending_rule_review"),
             primary_count("corpus_suspect"),
             primary_count("unsupported_character_review"),
+            primary_count("comparison_method"),
             stats.output_signature_mismatches_evaluated,
             stats.first_difference_in_output_signature,
             transition_count(target),
@@ -4688,6 +4702,12 @@ fn markdown(report: &AnalysisReport) -> String {
     );
     text.push_str(
         "| Rules 68/69 compact compatibility-derived ASCII units | 5,141/5,141 | 66,546/83,528 | 79.67% | Compact ASCII unit spellings are derived from the engine's already accepted Unicode compatibility-unit forms and reuse their owning-rule cells, with longest-complete matching and no expansion to separated English words; `160mg`, numeric-invariance control `240mg`, and Rule-68 `ha` controls are retained; 110 cases became exact |\n",
+    );
+    text.push_str(
+        "| UEB numeric-mode letter classes in Roman identifiers | 5,141/5,141 | 67,012/83,528 | 80.23% | Lowercase `a`-`j` retains grade 1 after digits, capitals use capitalization, and lowercase `k`-`z` needs no extra indicator; numeric-leading Rule-69 units remain separate |\n\
+         | UEB complete all-caps segments across hyphen | 5,141/5,141 | 67,138/83,528 | 80.38% | The grade-1 restart is omitted only between a complete uppercase prefix and an uppercase suffix of at least two letters; mixed/single-capital and digit-hyphen controls remain unchanged |\n\
+         | Rule-29 consecutive Roman entry idempotence | 5,141/5,141 | 67,442/83,528 | 80.74% | An explicit Roman-entry event is ignored only when final emit state is already inside the same Roman section |\n\
+         | Rules 29/71 complete attached Roman ampersand run | 5,141/5,141 | 67,715/83,528 | 81.07% | Complete ASCII-letter segments joined by `&` retain one Roman section; official `AT&T`, `B&B`, and spaced Korean Rule-71 controls delimit the safe boundary; 273 cases became exact |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
@@ -5406,14 +5426,14 @@ mod tests {
     #[case::merger("인수·합병(M&A) 시장")]
     #[case::brand("브랜드(P&G) 편입")]
     #[case::research("연구·개발(R&D)을 추진")]
-    fn locates_attached_roman_ampersand_in_korean_output(#[case] input: &str) {
+    fn resolved_attached_roman_ampersand_has_no_boundary_signature(#[case] input: &str) {
         let actual = braillify::encode_to_unicode(input).expect("ampersand probe must encode");
         let ranges = attached_roman_ampersand_boundary_ranges(input, &actual);
 
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0].end - ranges[0].start, 1);
-        assert_eq!(actual.chars().nth(ranges[0].start), Some('⠲'));
-        assert!(ranges[0].end <= actual.chars().count());
+        assert!(ranges.is_empty());
+        assert!(actual.contains("⠈⠯"));
+        assert!(!actual.contains("⠲⠴⠈⠯"));
+        assert!(!actual.contains("⠈⠯⠲⠴"));
     }
 
     #[rstest::rstest]

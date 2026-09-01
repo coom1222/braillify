@@ -47,6 +47,13 @@ fn should_wrap_information_symbol(ctx: &RuleContext) -> bool {
     prev_has_korean || next_has_korean
 }
 
+/// UEB 3.1.1 writes `&` directly between attached ASCII-letter segments
+/// (for example, AT&T and B&B). The surrounding Roman section already owns
+/// the mode indicators, so Rule 71 must emit only the ampersand cells there.
+fn is_attached_roman_ampersand(ctx: &RuleContext) -> bool {
+    crate::english_logic::is_attached_ascii_roman_ampersand(ctx.word_chars, ctx.index)
+}
+
 pub fn is_rule_71_symbol(c: char) -> bool {
     MAPPINGS.iter().any(|(candidate, _)| *candidate == c)
 }
@@ -103,6 +110,7 @@ impl BrailleRule for Rule71 {
         let mut encoded = Vec::new();
         if should_wrap_information_symbol(ctx)
             && matches!(ctx.current_char(), '&' | '¶' | '©' | '®' | '™')
+            && !is_attached_roman_ampersand(ctx)
         {
             encoded.push(crate::unicode::decode_unicode('⠴'));
             encoded.extend(encode_unicode_cells(unicode));
@@ -169,5 +177,43 @@ mod tests {
         assert!(result.is_ok());
         // Also: § alone (no next char) → no digit → ⠲ appended.
         let _ = crate::encode("§");
+    }
+
+    /// The Korean Rule 71 encoder owns the ampersand cells even while the
+    /// surrounding Roman section remains open. These are the official UEB
+    /// 3.1.1 surface forms, not corpus-derived examples.
+    #[rstest::rstest]
+    #[case::official_at_and_t("AT&T")]
+    #[case::official_b_and_b("B&B")]
+    fn attached_roman_ampersand_emits_bare_rule_71_cells(#[case] input: &str) {
+        let mut owned = crate::test_helpers::CtxOwned::for_text(input, false);
+        let ampersand_index = input.chars().position(|ch| ch == '&').unwrap();
+        let mut ctx = owned.ctx_at(ampersand_index);
+
+        let outcome = Rule71.apply(&mut ctx).unwrap();
+
+        assert!(matches!(outcome, RuleResult::Consumed));
+        assert_eq!(ctx.result.as_slice(), encode_unicode_cells("⠈⠯"));
+    }
+
+    /// Full-encoder controls reproduce the two UEB 3.1.1 examples exactly.
+    #[rstest::rstest]
+    #[case::official_at_and_t("AT&T", "⠠⠠⠁⠞⠈⠯⠠⠞")]
+    #[case::official_b_and_b("B&B", "⠠⠃⠈⠯⠠⠃")]
+    fn full_encoder_preserves_official_ueb_ampersand_examples(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    /// Korean Rule 71's spaced Hangul example remains an independently
+    /// delimited information symbol after the attached-Roman exception.
+    #[test]
+    fn full_encoder_preserves_official_korean_spaced_ampersand_example() {
+        assert_eq!(
+            crate::encode_to_unicode("종이접기 & 클레이아트").unwrap(),
+            "⠨⠿⠕⠨⠎⠃⠈⠕⠀⠴⠈⠯⠲⠀⠋⠮⠐⠝⠕⠣⠓⠪",
+        );
     }
 }

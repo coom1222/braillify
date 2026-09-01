@@ -78,6 +78,45 @@ fn is_ascii_letter_or_digit(ch: Option<char>) -> bool {
     ch.is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
+/// Returns whether `index` is an ampersand inside a complete sequence of
+/// non-empty ASCII-letter segments joined by `&`. Alphanumeric characters
+/// outside the maximal sequence are excluded because UEB 3.1.1 directly
+/// establishes only complete attached Roman forms such as AT&T and B&B.
+pub(crate) fn is_attached_ascii_roman_ampersand(word_chars: &[char], index: usize) -> bool {
+    if word_chars.get(index) != Some(&'&')
+        || index == 0
+        || index + 1 >= word_chars.len()
+        || !word_chars[index - 1].is_ascii_alphabetic()
+        || !word_chars[index + 1].is_ascii_alphabetic()
+    {
+        return false;
+    }
+
+    let mut start = index;
+    while start > 0 && (word_chars[start - 1].is_ascii_alphabetic() || word_chars[start - 1] == '&')
+    {
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while end < word_chars.len()
+        && (word_chars[end].is_ascii_alphabetic() || word_chars[end] == '&')
+    {
+        end += 1;
+    }
+
+    word_chars[start..end]
+        .first()
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+        && word_chars[start..end]
+            .last()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        && !word_chars[start..end]
+            .windows(2)
+            .any(|pair| pair == ['&', '&'])
+        && (start == 0 || !word_chars[start - 1].is_ascii_alphanumeric())
+        && (end == word_chars.len() || !word_chars[end].is_ascii_alphanumeric())
+}
+
 fn is_digital_notation_symbol(symbol: char) -> bool {
     matches!(symbol, '/' | '@' | '#' | '.' | '_' | ':')
 }
@@ -173,6 +212,11 @@ pub(crate) fn should_render_symbol_as_english(
     match symbol {
         '(' => is_ascii_letter_or_digit(next_char) && !prev_char.is_some_and(utils::is_korean_char),
         ')' => parenthesis_stack.last().copied().unwrap_or(false),
+        // UEB 3.1.1 prints an ampersand without ending and restarting
+        // grade-1 mode in attached Roman forms such as AT&T and B&B. Use
+        // a complete ASCII-letter run so spaced prose, Hangul, and outer
+        // alphanumeric continuations keep their existing routes.
+        '&' => is_attached_ascii_roman_ampersand(word_chars, index),
         ',' => {
             if !is_english {
                 return false;
@@ -347,6 +391,34 @@ mod tests {
         assert_eq!(
             should_render_symbol_as_english(true, is_english, &[], ',', &word, 1, &[]),
             expected
+        );
+    }
+
+    /// UEB 3.1.1 keeps attached Roman segments on both sides of `&` in the
+    /// same mode. The complete-run boundary deliberately excludes spaced
+    /// prose, Hangul boundaries, and outer alphanumeric continuations.
+    #[rstest::rstest]
+    #[case::official_at_and_t("AT&T", true, true)]
+    #[case::official_b_and_b("B&B", true, true)]
+    #[case::spaced("A & B", true, false)]
+    #[case::hangul_left("가&B", true, false)]
+    #[case::hangul_right("A&나", true, false)]
+    #[case::digit_neighbor("3&B", true, false)]
+    #[case::digit_outer_left("3A&B", true, false)]
+    #[case::digit_outer_right("A&B3", true, false)]
+    #[case::multiple_ampersands("A&B&C", true, true)]
+    #[case::empty_segment("A&&B", true, false)]
+    #[case::no_roman_indicator("AT&T", false, false)]
+    fn attached_ampersand_requires_complete_ascii_roman_run(
+        #[case] input: &str,
+        #[case] english_indicator: bool,
+        #[case] expected: bool,
+    ) {
+        let word: Vec<char> = input.chars().collect();
+        let index = word.iter().position(|ch| *ch == '&').unwrap();
+        assert_eq!(
+            should_render_symbol_as_english(english_indicator, true, &[], '&', &word, index, &[],),
+            expected,
         );
     }
 
