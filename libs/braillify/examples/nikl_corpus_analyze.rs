@@ -584,6 +584,8 @@ const KOREAN_MAJORITY_ROMAN_SANDWICH_NON_DOMAIN: &str =
     "korean_majority_same_token_roman_sandwich_non_domain";
 const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
+const ATTACHED_PLUS_PARENTHESIZED_KOREAN_GLOSS: &str =
+    "attached_plus_followed_by_parenthesized_korean_gloss";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
 const ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING: &str = "attached_korean_auxiliary_itda_spacing";
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
@@ -2634,6 +2636,7 @@ fn first_difference_claimed_by_prior_localized_cohort(item: &EncodedCase) -> boo
         || first_difference_in_decimal_word(item)
         || first_difference_in_korean_prefixed_annotation_opening(item)
         || first_difference_in_inline_parenthesized_operator(item)
+        || first_difference_in_attached_plus_parenthesized_korean_gloss(item)
         || first_difference_in_tight_triangle(item)
         || first_difference_at_roman_middle_dot_boundary(item)
         || first_difference_in_uppercase_ascii_ampersand(item)
@@ -3340,6 +3343,76 @@ fn first_difference_in_inline_parenthesized_operator(item: &EncodedCase) -> bool
         .any(|range| range.contains(&first_difference))
 }
 
+/// Finds `한글+(한글 풀이)` without inferring whether the plus sign is an
+/// arithmetic operator or part of a brand name. The strict body grammar keeps
+/// this diagnostic separate from Roman/math parentheticals.
+fn attached_plus_parenthesized_korean_gloss_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = Vec::new();
+    for (plus_byte, marker) in input.match_indices("+(") {
+        if !input[..plus_byte]
+            .chars()
+            .next_back()
+            .is_some_and(is_korean_script)
+        {
+            continue;
+        }
+
+        let body_start = plus_byte + marker.len();
+        let Some(close_offset) = input[body_start..].find(')') else {
+            continue;
+        };
+        let close_byte = body_start + close_offset;
+        let body = &input[body_start..close_byte];
+        if !body.is_empty() && body.chars().all(is_korean_script) {
+            spans.push(InputSpan {
+                start_byte: plus_byte,
+                end_byte: close_byte + 1,
+            });
+        }
+    }
+    spans
+}
+
+/// Anchors each gloss at the output of the real input prefix immediately
+/// before `+`, then verifies a current-engine signature made from the actual
+/// input span in neutral Korean context. No corpus reference cells are used.
+fn attached_plus_parenthesized_korean_gloss_actual_ranges(
+    input: &str,
+    actual: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let left_probe_cells = braillify::encode_to_unicode("가")
+        .expect("neutral Korean probe must encode")
+        .chars()
+        .count();
+
+    attached_plus_parenthesized_korean_gloss_spans(input)
+        .into_iter()
+        .filter_map(|span| {
+            let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).ok()?;
+            let start = prefix.chars().count();
+            let run = &input[span.start_byte..span.end_byte];
+            let probe = braillify::encode_to_unicode(&format!("가{run}")).ok()?;
+            let signature = probe.chars().skip(left_probe_cells).collect::<Vec<_>>();
+            let end = start.checked_add(signature.len())?;
+            (actual_cells.get(start..end) == Some(signature.as_slice())).then_some(start..end)
+        })
+        .collect()
+}
+
+fn first_difference_in_attached_plus_parenthesized_korean_gloss(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    attached_plus_parenthesized_korean_gloss_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 fn tight_triangle_spans(input: &str) -> Vec<InputSpan> {
     input
         .match_indices('△')
@@ -3718,6 +3791,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ATTACHED_PLUS_PARENTHESIZED_KOREAN_GLOSS.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -4018,6 +4095,13 @@ fn analyze(
                 !inline_parenthesized_operators(&item.located.case.input).is_empty(),
                 Some(first_difference_in_inline_parenthesized_operator(item)),
                 false,
+            ),
+            (
+                ATTACHED_PLUS_PARENTHESIZED_KOREAN_GLOSS,
+                !attached_plus_parenthesized_korean_gloss_spans(&item.located.case.input)
+                    .is_empty(),
+                Some(first_difference_in_attached_plus_parenthesized_korean_gloss(item)),
+                true,
             ),
             (
                 MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION,
@@ -4655,7 +4739,12 @@ fn markdown(report: &AnalysisReport) -> String {
          `Korean(` + one rule-45 arithmetic operator + `)Korean` span. Unlike broad coexistence \
          traits, it also locates the current engine's emitted structure and counts a mismatch as \
          signature-local only when the sentence's first differing cell falls inside that output \
-         range. The `allcaps_roman_run_containing_ou` gate finds maximal, alphanumeric-delimited \
+         range. The `attached_plus_followed_by_parenthesized_korean_gloss` gate requires literal \
+         `한글+(한글)` with a non-empty all-Korean gloss. It anchors the real prefix immediately \
+         before `+` and verifies the current neutral-Korean output signature, distinguishing \
+         rule-46 spacing at the sign from unrelated differences elsewhere without deciding \
+         whether a name is mathematical. The `allcaps_roman_run_containing_ou` gate finds \
+         maximal, alphanumeric-delimited \
          uppercase ASCII runs containing adjacent `OU`. It locates the independently encoded run \
          signature in the complete current output and counts only first differences inside that \
          signature as localized. The `allcaps_roman_run_containing_st` gate applies the same \
@@ -6680,8 +6769,33 @@ fn markdown(report: &AnalysisReport) -> String {
              cases; the corpus-wide total moved from 65,491 to 65,514 (+23 exact) because the same \
              PDF-backed spacing rule also applied outside the stricter Korean-boundary audit \
              gate. These are immutable checkpoint counts rather than the report's later cumulative \
-             total. The complete standard suite remained 5,141/5,141.\n",
+            total. The complete standard suite remained 5,141/5,141.\n",
         );
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ATTACHED_PLUS_PARENTHESIZED_KOREAN_GLOSS)
+    {
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "\nCurrent attached plus + parenthesized Korean-gloss measurement: {} candidates, \
+             {} exact controls, {} mismatches, {pending} members in the actual \
+             `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose first \
+             differing cell is inside the current emitted structure. Hangeul rule 46 supplies \
+             the operation-sign spacing control, but the surface form alone does not establish \
+             whether a brand or program name uses `+` mathematically. Exact and localized \
+             mismatch references coexist for `도전+(플러스)`, so no engine change or primary \
+             reclassification is inferred.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated
+        ));
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
@@ -8334,6 +8448,36 @@ mod tests {
         let input = "양(+)극";
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = inline_parenthesized_operator_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::program_name("도전+(플러스)", vec!["+(플러스)"])]
+    #[case::descriptive_gloss("자립+(더하기) 프로젝트", vec!["+(더하기)"])]
+    #[case::multiple("디즈니+(플러스), 애플+(플러스)", vec!["+(플러스)", "+(플러스)"])]
+    #[case::roman_prefix("TV+(플러스)", vec![])]
+    #[case::spaced_plus("도전 +(플러스)", vec![])]
+    #[case::roman_body("도전+(plus)", vec![])]
+    #[case::empty_body("도전+()", vec![])]
+    fn detects_attached_plus_parenthesized_korean_gloss(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = attached_plus_parenthesized_korean_gloss_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn locates_current_engine_attached_plus_gloss_output() {
+        let input = "과 도전+(플러스) 프로그램";
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = attached_plus_parenthesized_korean_gloss_actual_ranges(input, &actual);
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
