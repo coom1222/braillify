@@ -107,6 +107,23 @@ fn is_consecutive_ascii_letter_run(chars: &[char]) -> bool {
             .all(|pair| u32::from(pair[1]) == u32::from(pair[0]) + 1)
 }
 
+/// Whether the characters attached after a Roman closing parenthesis belong
+/// to ordinary prose rather than an alphanumeric/math continuation.
+///
+/// Korean rule 34 explicitly attaches the Korean particle in
+/// `링컨(Lincoln)은`. The same boundary applies to a multiword Roman expansion:
+/// Korean text and sentence punctuation after `)` must remain on the prose
+/// path, while a digit or an ASCII letter keeps the token eligible for math.
+fn is_roman_parenthetical_prose_trailer(chars: impl Iterator<Item = char>) -> bool {
+    chars.into_iter().all(|ch| {
+        is_korean_char(ch)
+            || matches!(
+                ch,
+                ',' | '.' | ';' | ':' | '!' | '?' | '\'' | '"' | '’' | '”'
+            )
+    })
+}
+
 fn has_ascii_letter_korean_math_suffix(chars: &[char]) -> bool {
     if chars.len() < 3 {
         return false;
@@ -166,9 +183,7 @@ fn is_multiword_closed_roman_parenthetical_tail(
     let trailing = &word.chars[close + 1..];
     if body.is_empty()
         || !body.iter().all(char::is_ascii_alphabetic)
-        || !trailing
-            .iter()
-            .all(|ch| matches!(*ch, ',' | '.' | ';' | ':' | '!' | '?' | '\'' | '"'))
+        || !is_roman_parenthetical_prose_trailer(trailing.iter().copied())
     {
         return false;
     }
@@ -204,6 +219,65 @@ fn is_multiword_closed_roman_parenthetical_tail(
         }
     }
     false
+}
+
+/// Returns true when `word` begins a closed, multiword Roman expansion headed
+/// by a complete all-capitals abbreviation.
+///
+/// Korean rules 29 and 34 make this ordinary Roman prose: the headword starts
+/// a Roman section, and the spaces inside the paired parenthesis do not split
+/// that section. The narrow grammar excludes single variables, digits,
+/// operators, nested brackets, and an alphanumeric continuation after `)` so
+/// mathematical expressions remain owned by the math parser.
+fn is_multiword_closed_roman_parenthetical_head(
+    tokens: &[Token<'_>],
+    index: usize,
+    word: &WordToken<'_>,
+) -> bool {
+    let text = word.text.as_ref();
+    let Some(open) = text.find('(') else {
+        return false;
+    };
+    let head = &text[..open];
+    let first_body_word = &text[open + 1..];
+    if head.chars().count() < 2
+        || !head.chars().all(|ch| ch.is_ascii_uppercase())
+        || first_body_word.is_empty()
+        || !first_body_word.chars().all(|ch| ch.is_ascii_alphabetic())
+    {
+        return false;
+    }
+
+    let mut cursor = index + 1;
+    let mut body_words = 1usize;
+    loop {
+        let mut saw_space = false;
+        while matches!(tokens.get(cursor), Some(Token::Space(_))) {
+            saw_space = true;
+            cursor += 1;
+        }
+        if !saw_space {
+            return false;
+        }
+        let Some(Token::Word(next)) = tokens.get(cursor) else {
+            return false;
+        };
+        let next_text = next.text.as_ref();
+        if let Some(close) = next_text.find(')') {
+            let final_body_word = &next_text[..close];
+            let trailing = &next_text[close + 1..];
+            body_words += 1;
+            return body_words >= 2
+                && !final_body_word.is_empty()
+                && final_body_word.chars().all(|ch| ch.is_ascii_alphabetic())
+                && is_roman_parenthetical_prose_trailer(trailing.chars());
+        }
+        if next_text.is_empty() || !next_text.chars().all(|ch| ch.is_ascii_alphabetic()) {
+            return false;
+        }
+        body_words += 1;
+        cursor += 1;
+    }
 }
 
 /// Walks backward from `index - 1`, skipping `Space`, returning whether the
@@ -349,7 +423,9 @@ pub(super) fn run<'a>(
 
     let text = word.text.as_ref();
 
-    if is_multiword_closed_roman_parenthetical_tail(tokens, index, word) {
+    if is_multiword_closed_roman_parenthetical_head(tokens, index, word)
+        || is_multiword_closed_roman_parenthetical_tail(tokens, index, word)
+    {
         return Ok(TokenAction::Noop);
     }
 
@@ -906,6 +982,8 @@ mod tests {
 
     #[rstest::rstest]
     #[case::ueb_multiword_parenthetical("plays (such as Romeo and Juliet)", true)]
+    #[case::korean_particle_after_parenthesis("설명(Home Connectivity Alliance)를", true)]
+    #[case::korean_particle_after_quote("설명(Home Connectivity Alliance)’를", true)]
     #[case::ueb_letter_list("(q, r)", false)]
     #[case::math_function("f(x)", false)]
     #[case::operator_interrupts_prose_run("(x + y)", false)]
@@ -935,6 +1013,47 @@ mod tests {
 
         assert_eq!(
             is_multiword_closed_roman_parenthetical_tail(&ir.tokens, index, word),
+            expected
+        );
+
+        if expected {
+            let mut state = EncoderState::new(false);
+            assert!(matches!(
+                run(&ir.tokens, index, &mut state).unwrap(),
+                TokenAction::Noop
+            ));
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::initialism_expansion("HCA(Home Connectivity Alliance)", true)]
+    #[case::punctuated_expansion("TB(Top View Battle),", true)]
+    #[case::korean_particle("HCA(Home Connectivity Alliance)를", true)]
+    #[case::quoted_korean_particle("HCA(Home Connectivity Alliance)’를", true)]
+    #[case::single_capital_head("A(Home Connectivity Alliance)", false)]
+    #[case::mixed_case_head("HCa(Home Connectivity Alliance)", false)]
+    #[case::single_word_body("HCA(Alliance)", false)]
+    #[case::digit_in_body("HCA(Home Connectivity2 Alliance)", false)]
+    #[case::operator_in_body("HCA(Home + Alliance)", false)]
+    #[case::nested_parenthesis("HCA((Home Connectivity Alliance))", false)]
+    #[case::alphanumeric_trailer("HCA(Home Connectivity Alliance)1", false)]
+    #[case::unclosed_expansion("HCA(Home Connectivity Alliance", false)]
+    fn recognizes_only_complete_allcaps_multiword_roman_expansion_heads(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        let ir = crate::rules::token::DocumentIR::parse(input, true);
+        let index = ir
+            .tokens
+            .iter()
+            .position(|token| matches!(token, Token::Word(_)))
+            .expect("probe must contain a word");
+        let Token::Word(word) = &ir.tokens[index] else {
+            unreachable!("selected token must be a word");
+        };
+
+        assert_eq!(
+            is_multiword_closed_roman_parenthetical_head(&ir.tokens, index, word),
             expected
         );
 

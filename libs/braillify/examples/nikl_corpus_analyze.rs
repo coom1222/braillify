@@ -5202,14 +5202,19 @@ fn markdown(report: &AnalysisReport) -> String {
         ));
     }
     text.push_str(
-        "\nThe HCA-style headword-expansion shape described above is not an engine \
-         implementation premise. The 2024 PDF's math rule 6 \
-         defines parentheses and grouping parentheses, rule 11 defines mathematical-expression \
-         spacing, rule 12 covers Roman letters in formulas as well as Korean sentences, and \
-         rule 45 shows Roman-letter function notation followed by parentheses. Excluding visible \
-         operators, scripts, and nesting narrows this corpus cohort, but the PDF does not make \
-         the remaining surface shape sufficient to rule out every mathematical counterexample. \
-         The cluster therefore remains conservative pending-review evidence only.\n\n\
+        "\nThe HCA-style headword-expansion gate now supplies one narrow prose-routing premise. \
+         Korean rules 29 and 34 require a fresh Roman section and continuous Roman transcription \
+         for a complete all-capitals headword followed by a closed, multiword Roman expansion. \
+         The implementation requires a headword of at least two ASCII capitals and at least two \
+         ASCII-letter words inside the parenthesis; digits, operators, scripts, nested brackets, \
+         and alphanumeric text after the closing parenthesis remain math-owned controls. Rule 34's \
+         `링컨(Lincoln)은` additionally proves that attached Korean text after the closing \
+         parenthesis stays on the prose route; the same boundary now covers the multiword form \
+         without admitting ASCII letters or digits in the trailer. Together these boundaries \
+         change 71 corpus cases from mismatch to exact and raise this cohort's exact controls from \
+         17 to 87. The residual members still measure contraction, capitalization, earlier sentence \
+         differences, unsupported characters, and reference-order conflicts rather than \
+         authorizing a wider surface-form rule.\n\n\
          The standalone-uppercase cohort is similarly ambiguous. Hangeul rule 28's appendix \
          defines the capital-word indicator for two or more consecutive capitals, and rule 29 \
          defines Roman indicators around Roman text in a Korean sentence. But math rule 12 also \
@@ -5233,10 +5238,11 @@ fn markdown(report: &AnalysisReport) -> String {
          `mixed_roman_korean_word_before_uppercase_headword_expansion` separately targets the \
          next Roman headword after a mixed Roman+Korean word (for example, a Korean particle \
          attached to the previous Roman name). Its range is anchored to that later headword, not \
-         to the earlier Roman entry. Nevertheless, the closed multiword parenthetical shape still \
-         cannot exclude every mathematical interpretation under math rules 6, 11, 12, and 45, \
-         as recorded for the broader HCA-style cohort. The headword shape is therefore not added \
-         to engine routing; the two causes and their controls remain separately measurable.\n\n\
+         to the earlier Roman entry. The narrow rules-29/34 prose gate described above is now \
+         implemented, and this cohort no longer has a missing-entry localized transition. Its \
+         remaining localized differences are later Roman-letter/contraction differences. The two \
+         causes and their controls remain \
+         separately measurable instead of widening the headword grammar.\n\n\
          The uppercase-Roman hyphen-digits cohort is a third independent cause. Hangeul rule 35 \
          explicitly shows `D-100` as a Roman-and-number continuation (2024 Korean-rules PDF \
          p.29), while math rule 2 defines subtraction and the math chapters allow uppercase Roman \
@@ -6269,8 +6275,9 @@ fn markdown(report: &AnalysisReport) -> String {
              measurement: {} candidates, {} exact controls, {} mismatches, {pending} members in \
              the actual `pending_rule_review` subcluster, and {}/{} evaluable mismatches whose \
              first difference is localized to the later headword's entry boundary/output. The \
-             detector cannot be satisfied by the earlier Roman entry. No HCA-shaped engine \
-             routing rule is introduced.\n",
+             detector cannot be satisfied by the earlier Roman entry. The narrow rules-29/34 \
+             headword-expansion route is active; these residuals therefore identify a separate \
+             state or Roman-letter difference.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -6960,7 +6967,9 @@ fn markdown(report: &AnalysisReport) -> String {
          | Rules 29/34 multiword Roman parenthetical continuity | 5,141/5,141 | 68,175/83,528 | 81.62% | A backwards-verified, closed letter-and-space Roman parenthetical tail stays on the prose route; function calls, digits, operators, nested brackets, and punctuation-separated forms remain outside; 74 cases became exact |\n\
          | Rules 29/32/71 ampersand before attached Roman segment | 5,141/5,141 | 68,187/83,528 | 81.63% | Official UEB `&c`, `AT&T`, and `B&B` keep one Roman section across attached `&`; the spaced Korean Rule-71 example, left ASCII alphanumerics, repeated ampersands, and trailing digits delimit the gate; 12 cases became exact |\n\
          | UEB 8.4.2 capitals-word nonletter boundary | 5,141/5,141 | 69,291/83,528 | 82.96% | Starting from the accepted 68,439-exact checkpoint, capitals-word handling ends at each nonletter and later uppercase runs restart independently; official `AT&T`, `B&B`, `MP3`, and `TVOntario` delimit the token/span boundary; 852 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n\
-         | UEB 8.4.2 same-token internal Roman apostrophe | 5,141/5,141 | 69,359/83,528 | 83.04% | A straight apostrophe stays in the Roman section only with immediate same-token ASCII letters on both sides, while capitals mode restarts for an uppercase suffix; official `O'Hara`, `DON'T`, `THAT'S`, and `SHE'LL` plus detached quote and measurement controls delimit the gate; 68 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n",
+         | UEB 8.4.2 same-token internal Roman apostrophe | 5,141/5,141 | 69,359/83,528 | 83.04% | A straight apostrophe stays in the Roman section only with immediate same-token ASCII letters on both sides, while capitals mode restarts for an uppercase suffix; official `O'Hara`, `DON'T`, `THAT'S`, and `SHE'LL` plus detached quote and measurement controls delimit the gate; 68 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n\
+         | Rules 29/34 all-caps headword with closed multiword Roman expansion | 5,141/5,141 | 69,389/83,528 | 83.07% | A complete two-or-more-capital headword followed by a closed expansion of at least two ASCII-letter words stays on the prose route; digits, operators, nesting, scripts, and alphanumeric trailers remain math controls; the cohort's exact count rose 17→47 with 30 corpus-wide gains |\n\
+         | Rule 34 Korean trailer after closed multiword Roman expansion | 5,141/5,141 | 69,430/83,528 | 83.12% | Rule 34's `링컨(Lincoln)은` establishes that attached Korean text after `)` remains prose; applying the same boundary to closed multiword expansions adds 41 corpus-wide exact matches and raises the headword cohort 47→87, while ASCII-letter and digit trailers remain excluded |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
