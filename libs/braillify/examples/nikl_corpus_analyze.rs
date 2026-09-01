@@ -594,6 +594,8 @@ const ROMAN_RUN_AFTER_CLOSED_ROMAN_ENCLOSURE: &str =
     "roman_run_after_whitespace_following_closed_roman_enclosure";
 const ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND: &str =
     "attached_ascii_roman_segments_joined_by_ampersand";
+const UPPERCASE_ASCII_SEGMENTS_JOINED_BY_AMPERSAND: &str =
+    "uppercase_ascii_segments_joined_by_ampersand_capitalization";
 const AMPERSAND_BEFORE_ATTACHED_ASCII_ROMAN_SEGMENT: &str =
     "ampersand_before_attached_ascii_roman_segment";
 const SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS: &str = "spaced_comma_between_ascii_digit_runs";
@@ -1117,6 +1119,30 @@ fn attached_ascii_roman_ampersand_spans(input: &str) -> Vec<InputSpan> {
         }
     }
     spans
+}
+
+/// Narrows the attached-Roman ampersand cohort to all-capital ASCII segments
+/// that begin their whitespace-delimited token. The current token-level bug
+/// can pre-emit one capitals-word indicator only in that position; a run
+/// attached after Korean or opening punctuation already takes the correct
+/// per-segment character path and is an out-of-scope control.
+/// UEB 8.4.2 terminates capitals word mode at the nonalphabetic ampersand, and
+/// the official UEB 3.1.1/8.4 examples `AT&T` and `B&B` therefore restart
+/// capitalization for the following segment. This detector uses only the
+/// printed input shape and does not inspect a corpus reference.
+fn uppercase_ascii_ampersand_spans(input: &str) -> Vec<InputSpan> {
+    attached_ascii_roman_ampersand_spans(input)
+        .into_iter()
+        .filter(|span| {
+            input[..span.start_byte]
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace)
+                && input[span.start_byte..span.end_byte]
+                    .split('&')
+                    .all(|segment| segment.bytes().all(|byte| byte.is_ascii_uppercase()))
+        })
+        .collect()
 }
 
 /// Finds an ampersand immediately followed by a complete ASCII-letter segment
@@ -2123,6 +2149,14 @@ fn first_difference_in_attached_roman_ampersand(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn first_difference_in_uppercase_ascii_ampersand(item: &EncodedCase) -> bool {
+    first_difference_in_korean_context_signature_spans(
+        item,
+        &uppercase_ascii_ampersand_spans(&item.located.case.input),
+        0,
+    )
+}
+
 /// Locates the Rule-71/29 boundary around an ampersand whose right-hand ASCII
 /// Roman segment is attached. The real input prefix before each occurrence
 /// anchors the current complete entry signature; the independently encoded
@@ -2481,6 +2515,7 @@ fn first_difference_claimed_by_prior_localized_cohort(item: &EncodedCase) -> boo
         || first_difference_in_inline_parenthesized_operator(item)
         || first_difference_in_tight_triangle(item)
         || first_difference_at_roman_middle_dot_boundary(item)
+        || first_difference_in_uppercase_ascii_ampersand(item)
         || first_difference_in_signature_spans(
             item,
             &single_capital_parenthesized_digit_spans(&item.located.case.input),
@@ -3541,6 +3576,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            UPPERCASE_ASCII_SEGMENTS_JOINED_BY_AMPERSAND.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ATTACHED_ASCII_ROMAN_SEGMENTS_JOINED_BY_AMPERSAND.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3785,6 +3824,12 @@ fn analyze(
                     !first_difference_claimed_before_allcaps_ed(item)
                         && first_difference_in_allcaps_ed_run(item),
                 ),
+                true,
+            ),
+            (
+                UPPERCASE_ASCII_SEGMENTS_JOINED_BY_AMPERSAND,
+                !uppercase_ascii_ampersand_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_in_uppercase_ascii_ampersand(item)),
                 true,
             ),
             (
@@ -4513,6 +4558,12 @@ fn markdown(report: &AnalysisReport) -> String {
          signature as localized. The `allcaps_roman_run_containing_st` gate applies the same \
          output-position requirement to adjacent `ST`; it is kept separate because UEB 10.12 \
          makes contraction use depend on how an abbreviation or acronym is pronounced. The \
+         `uppercase_ascii_segments_joined_by_ampersand_capitalization` gate narrows attached \
+         ampersand runs to uppercase-only segments and locates the complete current Korean-context \
+         output. The run must begin its whitespace-delimited token, matching the current \
+         token-level capitals-word pre-emission scope; Korean-attached and punctuation-prefixed \
+         occurrences remain controls. UEB 8.4.2 says a nonalphabetic symbol terminates capitals word mode, while the \
+         official `AT&T` and `B&B` examples restart capitalization after `&`. The broader \
          `attached_ascii_roman_segments_joined_by_ampersand` gate requires non-empty ASCII-letter \
          segments joined directly by `&`, excludes spaced/Korean/alphanumeric continuations, and \
          localizes only the current output cell immediately before the ampersand through an \
@@ -5417,6 +5468,48 @@ fn markdown(report: &AnalysisReport) -> String {
             residual_transition(target),
             raw_transition(reverse),
             residual_transition(reverse),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(UPPERCASE_ASCII_SEGMENTS_JOINED_BY_AMPERSAND)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        text.push_str(&format!(
+            "\n### Uppercase segments joined by ampersand: capitalization extent\n\n\
+             UEB 8.4.2 (2024 UEB PDF p.118, printed p.90) terminates capitals word \
+             mode at a nonalphabetic symbol. UEB 3.1.1 and the capitalization examples \
+             (PDF pp.51 and 120, printed pp.23 and 92) consequently print `AT&T` as \
+             `⠠⠠⠁⠞⠈⠯⠠⠞` and `B&B` as `⠠⠃⠈⠯⠠⠃`: Roman mode remains \
+             continuous, but capitalization restarts for each ASCII-letter segment. The detector \
+             accepts only complete uppercase ASCII segments joined directly by `&`, with the same \
+             non-alphanumeric outer boundaries as the existing Roman-ampersand rule, and requires \
+             the run to begin its whitespace-delimited token. Korean-attached and \
+             punctuation-prefixed occurrences stay outside the change scope.\n\n\
+             The current baseline contains {} candidates, {} exact controls, and {} mismatches. \
+             Existing mismatch primaries remain {} `pending_rule_review`, {} `corpus_suspect`, {} \
+             `comparison_method`, and {} `unsupported_character_review`. Of {} evaluable \
+             mismatches, {} have their first difference inside the independently reproduced \
+             Korean-context output signature. The cohort table above retains the transition \
+             distribution and shard/index samples. Because capitalization extent is fixed by the \
+             official symbol examples and does not require pronunciation or corpus semantics, this \
+             is a high-confidence implementation candidate; the diagnostic itself does not change \
+             any primary class.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
         ));
     }
     if let Some(stats) = report
@@ -7336,6 +7429,49 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(braillify::encode_to_unicode(input).as_deref(), Ok(expected));
+    }
+
+    #[rstest::rstest]
+    #[case::official_at_and_t("AT&T", vec!["AT&T"])]
+    #[case::official_b_and_b("B&B", vec!["B&B"])]
+    #[case::multiple_uppercase_segments("M&A&R", vec!["M&A&R"])]
+    #[case::lowercase_segment_excluded("R&d", vec![])]
+    #[case::spaced_excluded("R & D", vec![])]
+    #[case::digit_continuation_excluded("R&D3", vec![])]
+    #[case::korean_attached_excluded("가(R&D)", vec![])]
+    #[case::whitespace_token_start("가 R&D", vec!["R&D"])]
+    fn detects_complete_uppercase_ampersand_segments(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = uppercase_ascii_ampersand_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn localizes_uppercase_ampersand_in_korean_context() {
+        let input = "가 R&D 나";
+        let actual = braillify::encode_to_unicode(input).expect("ampersand probe must encode");
+        let ranges = korean_context_signature_ranges(
+            input,
+            &actual,
+            &uppercase_ascii_ampersand_spans(input),
+            0,
+        );
+        let signature = korean_context_signature("R&D").expect("signature must encode");
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(
+            actual
+                .chars()
+                .skip(ranges[0].start)
+                .take(ranges[0].len())
+                .collect::<String>(),
+            signature
+        );
     }
 
     #[rstest::rstest]
