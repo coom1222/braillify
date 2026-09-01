@@ -1773,6 +1773,8 @@
   },
   "corpus/sentence": {
     "title": "NIKL 말뭉치",
-    "description": "NIKL Korean-Korean Braille Parallel Corpus 2025 v1.0"
+    "description": "NIKL Korean-Korean Braille Parallel Corpus 2025 v1.0",
+    "benchmark": true,
+    "shards": true
   }
 }
