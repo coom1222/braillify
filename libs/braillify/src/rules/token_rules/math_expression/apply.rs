@@ -907,6 +907,7 @@ mod tests {
     #[case::operator_interrupts_prose_run("(x + y)", false)]
     #[case::no_closing_parenthesis("Romeo Juliet", false)]
     #[case::function_with_spaced_argument("f(x y)", false)]
+    #[case::ueb_multiword_parenthetical("plays (such as Romeo and Juliet)", true)]
     #[case::missing_opening_parenthesis("Romeo Juliet)", false)]
     #[case::invalid_trailing_digit("(Romeo Juliet)1", false)]
     #[case::digit_in_final_fragment("(Romeo Juliet2)", false)]

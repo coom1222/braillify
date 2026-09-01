@@ -442,6 +442,21 @@ pub(super) fn split_mixed_math_word(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rstest::rstest]
+    #[case::official_rule_34_annotation("(Lincoln)", true)]
+    #[case::missing_opening("Lincoln)", false)]
+    #[case::missing_closing("(Lincoln", false)]
+    #[case::empty_body("()", false)]
+    fn recognizes_only_closed_roman_annotation_suffixes(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            is_closed_roman_annotation_suffix(&input.chars().collect::<Vec<_>>()),
+            expected
+        );
+    }
     use crate::rules::math::math_token_rule::MathContext;
     use crate::rules::token::SpaceKind;
 

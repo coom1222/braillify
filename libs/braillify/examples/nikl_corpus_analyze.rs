@@ -3419,14 +3419,16 @@ fn attached_korean_auxiliary_itda_actual_ranges(
     actual: &str,
 ) -> Vec<std::ops::Range<usize>> {
     let actual_cells = actual.chars().collect::<Vec<_>>();
-    attached_korean_auxiliary_itda_spans(input)
-        .into_iter()
-        .filter_map(|span| {
-            let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).ok()?;
-            let start = prefix.chars().count();
-            (actual_cells.get(start) == Some(&'⠀')).then_some(start..start + 1)
-        })
-        .collect()
+    let mut ranges = Vec::new();
+    for span in attached_korean_auxiliary_itda_spans(input) {
+        let prefix = braillify::encode_to_unicode(&input[..span.start_byte])
+            .expect("an encodable sentence must have an encodable prefix");
+        let start = prefix.chars().count();
+        if actual_cells.get(start) == Some(&'⠀') {
+            ranges.push(start..start + 1);
+        }
+    }
+    ranges
 }
 
 fn first_difference_at_attached_korean_auxiliary_itda_spacing(item: &EncodedCase) -> bool {
@@ -8415,6 +8417,28 @@ mod tests {
         let ranges = attached_korean_auxiliary_itda_actual_ranges(input, &actual);
 
         assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn localizes_a_blank_inserted_before_attached_itda() {
+        let input = "성장을 하고있다.";
+        let span = attached_korean_auxiliary_itda_spans(input)
+            .into_iter()
+            .next()
+            .expect("probe must contain the attached suffix");
+        let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).unwrap();
+        let start = prefix.chars().count();
+        let mut actual = braillify::encode_to_unicode(input).unwrap();
+        let insert_at = actual
+            .char_indices()
+            .nth(start)
+            .map_or(actual.len(), |(byte, _)| byte);
+        actual.insert(insert_at, '⠀');
+
+        assert_eq!(
+            attached_korean_auxiliary_itda_actual_ranges(input, &actual),
+            vec![start..start + 1]
+        );
     }
 
     #[test]
