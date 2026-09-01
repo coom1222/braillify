@@ -598,6 +598,7 @@ const AMPERSAND_BEFORE_ATTACHED_ASCII_ROMAN_SEGMENT: &str =
 const SPACED_COMMA_BETWEEN_ASCII_DIGIT_RUNS: &str = "spaced_comma_between_ascii_digit_runs";
 const ASCII_ROMAN_COMMA_BEFORE_DIGIT_KOREAN_TOKEN: &str =
     "ascii_roman_tail_comma_before_digit_korean_token";
+const PERCENT_POINT_UNIT_LIST_COMMA: &str = "percent_point_unit_list_comma";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
@@ -1221,6 +1222,52 @@ fn ascii_roman_comma_before_digit_korean_token_spans(input: &str) -> Vec<InputSp
             }
 
             let left_start = input[..comma_byte]
+                .char_indices()
+                .rev()
+                .find_map(|(byte, ch)| ch.is_whitespace().then_some(byte + ch.len_utf8()))
+                .unwrap_or(0);
+            Some(InputSpan {
+                start_byte: left_start,
+                end_byte: right_end,
+            })
+        })
+        .collect()
+}
+
+/// Finds a comma between two whitespace-separated numeric `%p` unit tokens.
+/// Korean rule 69 attachment 2 defines `%p` as the percent-point unit; rule 49
+/// therefore owns the comma separating complete measurements. This remains a
+/// diagnostic scope cohort rather than an input-specific engine branch.
+fn percent_point_unit_list_comma_spans(input: &str) -> Vec<InputSpan> {
+    input
+        .match_indices("%p,")
+        .filter_map(|(unit_byte, matched)| {
+            if !input[..unit_byte]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_digit())
+            {
+                return None;
+            }
+            let comma_byte = unit_byte + matched.len() - 1;
+            let after_comma = comma_byte + 1;
+            let (right_offset, right_first) = input[after_comma..]
+                .char_indices()
+                .find(|(_, ch)| !ch.is_whitespace())?;
+            if right_offset == 0 || !right_first.is_ascii_digit() {
+                return None;
+            }
+            let right_start = after_comma + right_offset;
+            let right_end = input[right_start..]
+                .char_indices()
+                .find_map(|(offset, ch)| ch.is_whitespace().then_some(right_start + offset))
+                .unwrap_or(input.len());
+            let right_token = input[right_start..right_end]
+                .trim_end_matches(|ch: char| !ch.is_ascii_alphanumeric());
+            if !right_token.ends_with("%p") {
+                return None;
+            }
+            let left_start = input[..unit_byte]
                 .char_indices()
                 .rev()
                 .find_map(|(byte, ch)| ch.is_whitespace().then_some(byte + ch.len_utf8()))
@@ -2182,6 +2229,33 @@ fn first_difference_at_ascii_roman_comma_before_digit_korean(item: &EncodedCase)
     .any(|range| range.contains(&first_difference))
 }
 
+fn first_difference_at_percent_point_unit_list_comma(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    if !matches!(
+        (
+            item.located.case.unicode.chars().nth(first_difference),
+            actual.chars().nth(first_difference)
+        ),
+        (Some('⠐'), Some('⠂')) | (Some('⠂'), Some('⠐'))
+    ) {
+        return false;
+    }
+    current_engine_signature_ranges(
+        &item.located.case.input,
+        actual,
+        &percent_point_unit_list_comma_spans(&item.located.case.input),
+        0,
+    )
+    .into_iter()
+    .any(|range| range.contains(&first_difference))
+}
+
 /// Finds a standalone single capital immediately followed by a non-empty,
 /// closed ASCII-digit parenthetical, such as `A(14)`. The span is deliberately
 /// semantic-neutral: prose labels and mathematical function notation can share
@@ -2537,6 +2611,7 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
         || first_difference_at_consecutive_ascii_roman_word_boundary(item)
         || first_difference_at_spaced_numeric_list_comma(item)
         || first_difference_at_ascii_roman_comma_before_digit_korean(item)
+        || first_difference_at_percent_point_unit_list_comma(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3421,6 +3496,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            PERCENT_POINT_UNIT_LIST_COMMA.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -3674,6 +3753,12 @@ fn analyze(
                 Some(first_difference_at_ascii_roman_comma_before_digit_korean(
                     item,
                 )),
+                true,
+            ),
+            (
+                PERCENT_POINT_UNIT_LIST_COMMA,
+                !percent_point_unit_list_comma_spans(&item.located.case.input).is_empty(),
+                Some(first_difference_at_percent_point_unit_list_comma(item)),
                 true,
             ),
             (
@@ -4859,8 +4944,8 @@ fn markdown(report: &AnalysisReport) -> String {
             primary_count("corpus_suspect"),
             primary_count("comparison_method"),
             primary_count("unsupported_character_review"),
-            stats.output_signature_mismatches_evaluated,
             stats.first_difference_in_output_signature,
+            stats.output_signature_mismatches_evaluated,
             localized_transition(target),
             localized_transition(reverse),
             localized_transition(open_to_space),
@@ -5485,7 +5570,7 @@ fn markdown(report: &AnalysisReport) -> String {
              Existing mismatch primaries remain {} `pending_rule_review`, {} `corpus_suspect`, \
              {} `comparison_method`, and {} `unsupported_character_review`. The \
              occurrence-specific locator encodes the real prefix immediately before each comma \
-             and claims only its next emitted cell: {}/{} evaluable mismatches localize there, \
+             and claims only its next emitted cell. Of {} evaluable mismatches, {} localize there, \
              including {} `{korean_to_ueb}` and {} `{ueb_to_korean}`. Across all pending cases, \
              the raw-to-residual counts after adding this cohort are {} -> {} for the target and \
              {} -> {} for the reverse. No primary class is changed and no implementation result \
@@ -5497,8 +5582,8 @@ fn markdown(report: &AnalysisReport) -> String {
             primary_count("corpus_suspect"),
             primary_count("comparison_method"),
             primary_count("unsupported_character_review"),
-            stats.first_difference_in_output_signature,
             stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
             localized_count(korean_to_ueb),
             localized_count(ueb_to_korean),
             raw_count(korean_to_ueb),
@@ -5545,6 +5630,53 @@ fn markdown(report: &AnalysisReport) -> String {
              transition inside the independently encoded complete boundary signature: {} \
              `{korean_to_ueb}` and {} `{ueb_to_korean}`. The detector and localizer do not read \
              expected output to choose a route, and membership does not change a primary class.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_count(korean_to_ueb),
+            localized_count(ueb_to_korean),
+        ));
+    }
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(PERCENT_POINT_UNIT_LIST_COMMA)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_count = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let korean_to_ueb = "U+2810 ⠐ -> U+2802 ⠂";
+        let ueb_to_korean = "U+2802 ⠂ -> U+2810 ⠐";
+        text.push_str(&format!(
+            "\n### Percent-point unit list comma\n\n\
+             Korean rule 69 attachment 2 (2024 Korean-rules PDF p.50, printed p.44) \
+             explicitly defines `%p` as the percent-point unit. This cohort requires two \
+             complete numeric `%p` tokens separated by comma plus whitespace, so rule 49's \
+             ordinary Korean comma is the punctuation boundary; it does not infer arbitrary \
+             ASCII suffixes as units. At the diagnostic baseline it has {} candidates / {} \
+             exact / {} mismatch, preserving {} `pending_rule_review`, {} `corpus_suspect`, {} \
+             `comparison_method`, and {} `unsupported_character_review` mismatch primaries. Of \
+             {} evaluable mismatches, {} localize to the independently encoded complete unit \
+             pair: {} `{korean_to_ueb}` and {} `{ueb_to_korean}`. This scope audit was added \
+             after the exact-set comparison identified the common `%p, ... %p` structure; the \
+             engine still contains only the general rule-41 same-token boundary, not a `%p` \
+             special case.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -6994,6 +7126,22 @@ mod tests {
         #[case] expected: Vec<&str>,
     ) {
         let actual = spaced_comma_between_ascii_digit_run_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    // 제69항 붙임 2의 `%p` 단위에만 한정한 입력 구조 진단이다.
+    #[case::complete_percent_point_units("0.7%p, 0.5%p", vec!["0.7%p, 0.5%p"])]
+    #[case::right_unit_missing("0.7%p, 0.5%", vec![])]
+    #[case::comma_not_followed_by_space("0.7%p,0.5%p", vec![])]
+    fn detects_only_complete_percent_point_unit_lists(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = percent_point_unit_list_comma_spans(input)
             .into_iter()
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
