@@ -796,7 +796,7 @@ mod tests {
     #[rstest::rstest]
     #[case::kilogram_in_parentheses("상자(20kg)당", "⠼⠃⠚⠴⠅⠛⠠⠴", "⠴⠅⠛⠲⠠⠴")]
     #[case::centimetre_before_korean_comma("키는 173cm, 몸무게는", "⠼⠁⠛⠉⠴⠉⠍⠐", "⠴⠉⠍⠲⠐")]
-    #[case::centimetre_before_next_measurement("키 173cm, 68kg", "⠼⠁⠛⠉⠴⠉⠍⠂", "⠴⠉⠍⠲⠂")]
+    #[case::centimetre_before_next_measurement("키 173cm, 68kg", "⠼⠁⠛⠉⠴⠉⠍⠐", "⠴⠉⠍⠲⠐")]
     #[case::metre_before_sentence_period("비거리 130m.", "⠼⠁⠉⠚⠴⠍⠲", "⠴⠍⠲⠲")]
     #[case::compatibility_kilogram_in_parentheses("상자(20㎏)당", "⠼⠃⠚⠴⠅⠛⠠⠴", "⠴⠅⠛⠲⠠⠴")]
     fn omits_unit_terminator_at_rule_33_or_34_boundary(
