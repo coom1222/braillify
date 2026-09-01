@@ -8420,6 +8420,36 @@ mod tests {
     }
 
     #[test]
+    fn skips_attached_roman_boundary_outcomes_when_encoding_failed() {
+        let item = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: "AI기술".to_string(),
+                    unicode: String::new(),
+                },
+            },
+            actual: Err("synthetic encoding failure".to_string()),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+        let mut stats = PendingRuleReviewClusterStats::default();
+
+        record_attached_ascii_roman_to_korean_marker_outcomes(
+            &mut stats,
+            &item,
+            "encoded_mismatch_pending_rule_review",
+            "pending_rule_review",
+            10,
+        );
+
+        assert!(stats.actual_output_signature_outcomes.is_empty());
+        assert!(stats.samples.is_empty());
+    }
+
+    #[test]
     fn localizes_a_blank_inserted_before_attached_itda() {
         let input = "성장을 하고있다.";
         let span = attached_korean_auxiliary_itda_spans(input)

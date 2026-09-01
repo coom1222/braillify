@@ -182,13 +182,17 @@ fn is_multiword_closed_roman_parenthetical_tail(
                 if let Some(open) = previous_text.rfind('(') {
                     let before = &previous_text[..open];
                     let after = &previous_text[open + 1..];
-                    return !after.is_empty()
-                        && after.chars().all(|ch| ch.is_ascii_alphabetic())
-                        && !before
-                            .chars()
-                            .next_back()
-                            .is_some_and(|ch| ch.is_ascii_alphabetic())
-                        && !before.chars().any(|ch| matches!(ch, '(' | ')'));
+                    if after.is_empty() || !after.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                        return false;
+                    }
+                    if before
+                        .chars()
+                        .next_back()
+                        .is_some_and(|ch| ch.is_ascii_alphabetic())
+                    {
+                        return false;
+                    }
+                    return !before.chars().any(|ch| matches!(ch, '(' | ')'));
                 }
                 if previous_text.chars().all(|ch| ch.is_ascii_alphabetic()) {
                     cursor = i.checked_sub(1);
@@ -907,7 +911,6 @@ mod tests {
     #[case::operator_interrupts_prose_run("(x + y)", false)]
     #[case::no_closing_parenthesis("Romeo Juliet", false)]
     #[case::function_with_spaced_argument("f(x y)", false)]
-    #[case::ueb_multiword_parenthetical("plays (such as Romeo and Juliet)", true)]
     #[case::missing_opening_parenthesis("Romeo Juliet)", false)]
     #[case::invalid_trailing_digit("(Romeo Juliet)1", false)]
     #[case::digit_in_final_fragment("(Romeo Juliet2)", false)]

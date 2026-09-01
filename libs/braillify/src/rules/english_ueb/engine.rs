@@ -221,7 +221,10 @@ impl EnglishUebEngine {
                 match classify_caps(chars)? {
                     Caps::None => {}
                     Caps::Single => out.push(CAPITAL),
-                    Caps::Word => out.extend([CAPITAL, CAPITAL]),
+                    Caps::Word => {
+                        out.push(CAPITAL);
+                        out.push(CAPITAL);
+                    }
                 }
             }
             out.extend(super::rule_10_9::encode_korean_groupsigns(
