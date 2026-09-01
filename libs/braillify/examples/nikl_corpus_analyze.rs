@@ -597,6 +597,12 @@ const ROMAN_UPPERCASE_AFTER_HYPHEN: &str =
     "uppercase_ascii_run_immediately_after_hyphen_in_roman_sequence";
 const PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS: &str =
     "pure_allcaps_segment_before_hyphen_and_multi_allcaps_segment_after";
+const ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD: &str =
+    "roman_hyphenated_word_after_whitespace_following_korean_word";
+const ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD: &str =
+    "roman_parenthetical_headword_after_whitespace_following_korean_word";
+const KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX: &str =
+    "korean_prefixed_roman_parenthetical_followed_by_allcaps_hyphen_suffix";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpan {
@@ -1096,6 +1102,113 @@ fn pure_allcaps_hyphen_multi_allcaps_spans(input: &str) -> Vec<InputSpan> {
         .collect()
 }
 
+fn preceding_whitespace_word_contains_korean(input: &str, start_byte: usize) -> bool {
+    let before = &input[..start_byte];
+    if !before.chars().next_back().is_some_and(char::is_whitespace) {
+        return false;
+    }
+    before
+        .trim_end_matches(char::is_whitespace)
+        .rsplit(char::is_whitespace)
+        .next()
+        .is_some_and(|word| word.chars().any(is_korean_script))
+}
+
+/// Narrows the broad hyphen-continuation trait to a new Roman word after a
+/// whitespace-delimited Korean-containing word. This separates entry-mode
+/// routing (`A-STAR`) from the already measured grade-1 boundary inside a
+/// Roman run (`CD-ROM`). It remains diagnostic because math rule 2 gives the
+/// same hyphen-minus a subtraction reading.
+fn roman_hyphenated_word_after_korean_word_spans(input: &str) -> Vec<InputSpan> {
+    roman_uppercase_after_hyphen_spans(input)
+        .into_iter()
+        .filter(|span| {
+            input.as_bytes()[span.start_byte].is_ascii_alphabetic()
+                && preceding_whitespace_word_contains_korean(input, span.start_byte)
+        })
+        .collect()
+}
+
+/// Finds a two-or-more-letter Roman headword immediately after a whitespace-
+/// delimited Korean-containing word and immediately before a non-empty closed
+/// parenthetical. The parenthetical may contain prose or notation; no semantic
+/// choice between Korean rule 29 and math rules 6/12/45 is inferred.
+fn roman_parenthetical_headword_after_korean_word_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    for (open, _) in input.match_indices('(') {
+        let mut start_byte = open;
+        while start_byte > 0 && bytes[start_byte - 1].is_ascii_alphabetic() {
+            start_byte -= 1;
+        }
+        if open - start_byte < 2 || !preceding_whitespace_word_contains_korean(input, start_byte) {
+            continue;
+        }
+        let body_start = open + 1;
+        let Some((close_offset, close)) = input[body_start..]
+            .char_indices()
+            .find(|(_, ch)| matches!(ch, '(' | ')'))
+        else {
+            continue;
+        };
+        if close == ')' && close_offset > 0 {
+            spans.push(InputSpan {
+                start_byte,
+                end_byte: open,
+            });
+        }
+    }
+    spans
+}
+
+/// Separates an attached rule-34-shaped Roman parenthetical followed by a
+/// hyphenated all-caps suffix from both whitespace Roman entry and ordinary
+/// all-caps hyphen continuation. The strict body/suffix gate is structural
+/// evidence only; rule 34 and math rules 6/12 still permit competing modes.
+fn korean_prefixed_roman_parenthetical_hyphen_suffix_spans(input: &str) -> Vec<InputSpan> {
+    let bytes = input.as_bytes();
+    let mut spans = Vec::new();
+    for (open, _) in input.match_indices('(') {
+        if !input[..open]
+            .chars()
+            .next_back()
+            .is_some_and(is_korean_script)
+        {
+            continue;
+        }
+        let body_start = open + 1;
+        let Some(close_offset) = input[body_start..].find(')') else {
+            continue;
+        };
+        let close = body_start + close_offset;
+        let body = &input[body_start..close];
+        if body.len() < 2 || !body.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            continue;
+        }
+        if bytes.get(close + 1) != Some(&b'-') {
+            continue;
+        }
+        let suffix_start = close + 2;
+        let mut end_byte = suffix_start;
+        while bytes.get(end_byte).is_some_and(u8::is_ascii_uppercase) {
+            end_byte += 1;
+        }
+        if end_byte - suffix_start < 2
+            || input[end_byte..]
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        spans.push(InputSpan {
+            start_byte: open,
+            end_byte,
+        });
+    }
+    spans
+}
+
 /// Locates each detected run in the full current-engine output by searching
 /// for that run's independently encoded signature. This uses neither the
 /// corpus reference nor a hard-coded braille value.
@@ -1175,7 +1288,7 @@ fn mixed_korean_word_signature(run: &str) -> Option<String> {
     Some(probe_cells.get(start..end)?.iter().collect())
 }
 
-fn grade1_cohort_signature_ranges(
+fn roman_entry_signature_ranges(
     input: &str,
     actual: &str,
     spans: &[InputSpan],
@@ -1235,7 +1348,52 @@ fn first_difference_in_grade1_cohort_spans(item: &EncodedCase, spans: &[InputSpa
     ) {
         return false;
     }
-    grade1_cohort_signature_ranges(&item.located.case.input, actual, spans, 1)
+    roman_entry_signature_ranges(&item.located.case.input, actual, spans, 1)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
+/// Locates the actual output boundary corresponding to an input span start.
+/// The prefix is encoded independently and must be byte-for-byte equal to the
+/// full output prefix, so a repeated Roman surface elsewhere cannot satisfy
+/// the locator. The short range covers only mode-entry cells, not the run.
+fn current_engine_input_entry_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+    entry_cells: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let mut ranges = BTreeSet::new();
+    for span in spans {
+        let Ok(prefix) = braillify::encode_to_unicode(&input[..span.start_byte]) else {
+            continue;
+        };
+        let prefix_cells = prefix.chars().collect::<Vec<_>>();
+        if actual_cells.starts_with(&prefix_cells) {
+            let start = prefix_cells.len();
+            let end = start.saturating_add(entry_cells).min(actual_cells.len());
+            if start < end {
+                ranges.insert((start, end));
+            }
+        }
+    }
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+fn first_difference_at_input_span_entry(
+    item: &EncodedCase,
+    spans: &[InputSpan],
+    entry_cells: usize,
+) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    current_engine_input_entry_ranges(&item.located.case.input, actual, spans, entry_cells)
         .into_iter()
         .any(|range| range.contains(&first_difference))
 }
@@ -1422,7 +1580,7 @@ fn first_difference_claimed_by_prior_localized_cohort(item: &EncodedCase) -> boo
         )
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_roman_entry_residual(item: &EncodedCase) -> bool {
     first_difference_claimed_by_prior_localized_cohort(item)
         || first_difference_in_grade1_cohort_spans(
             item,
@@ -1435,6 +1593,25 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
         || first_difference_in_grade1_cohort_spans(
             item,
             &roman_uppercase_after_hyphen_spans(&item.located.case.input),
+        )
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_roman_entry_residual(item)
+        || first_difference_at_input_span_entry(
+            item,
+            &roman_hyphenated_word_after_korean_word_spans(&item.located.case.input),
+            2,
+        )
+        || first_difference_at_input_span_entry(
+            item,
+            &roman_parenthetical_headword_after_korean_word_spans(&item.located.case.input),
+            2,
+        )
+        || first_difference_at_input_span_entry(
+            item,
+            &korean_prefixed_roman_parenthetical_hyphen_suffix_spans(&item.located.case.input),
+            2,
         )
 }
 
@@ -2097,6 +2274,18 @@ fn analyze(
             PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
+        (
+            ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
+            KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
     ]);
     let mut pending_first_difference_cell_transitions = BTreeMap::new();
     let mut pending_first_difference_transitions_after_localized_cohorts = BTreeMap::new();
@@ -2311,6 +2500,53 @@ fn analyze(
                         && first_difference_in_grade1_cohort_spans(
                             item,
                             &pure_allcaps_hyphen_multi_allcaps_spans(&item.located.case.input),
+                        ),
+                ),
+                true,
+            ),
+            (
+                ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD,
+                !roman_hyphenated_word_after_korean_word_spans(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_roman_entry_residual(item)
+                        && first_difference_at_input_span_entry(
+                            item,
+                            &roman_hyphenated_word_after_korean_word_spans(
+                                &item.located.case.input,
+                            ),
+                            2,
+                        ),
+                ),
+                true,
+            ),
+            (
+                ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD,
+                !roman_parenthetical_headword_after_korean_word_spans(&item.located.case.input)
+                    .is_empty(),
+                Some(
+                    !first_difference_claimed_before_roman_entry_residual(item)
+                        && first_difference_at_input_span_entry(
+                            item,
+                            &roman_parenthetical_headword_after_korean_word_spans(
+                                &item.located.case.input,
+                            ),
+                            2,
+                        ),
+                ),
+                true,
+            ),
+            (
+                KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX,
+                !korean_prefixed_roman_parenthetical_hyphen_suffix_spans(&item.located.case.input)
+                    .is_empty(),
+                Some(
+                    !first_difference_claimed_before_roman_entry_residual(item)
+                        && first_difference_at_input_span_entry(
+                            item,
+                            &korean_prefixed_roman_parenthetical_hyphen_suffix_spans(
+                                &item.located.case.input,
+                            ),
+                            2,
                         ),
                 ),
                 true,
@@ -3005,6 +3241,83 @@ fn markdown(report: &AnalysisReport) -> String {
          regression. Digit-hyphen forms such as `F-35` remain excluded, and the \
          complete-shortform guard still legitimately precedes `CD` in `CD-ROM`.\n\n",
     );
+    text.push_str("\n## Roman-entry residual cohorts after grade-1 localization\n\n");
+    text.push_str(
+        "These three cohorts split the former dominant `⠴ -> blank` residual by the input \
+         structure at the actual first-difference location. Their entry boundary is anchored by \
+         independently encoding the input prefix and requiring it to equal the full current-engine \
+         output prefix; repeated Roman text elsewhere cannot satisfy the locator. A localized count \
+         is recorded only when no earlier output-localized cohort already claims that first \
+         difference. Candidate membership remains cross-cutting and never changes a primary class.\n\n\
+         Korean rule 29 requires a Roman indicator before Roman text in a Korean sentence. Rules \
+         33-35 define the relevant hyphen, enclosure, and number boundaries. Independently, math \
+         rules 2, 6, 11, 12, and 45 permit subtraction, parentheses, Roman variables, and function \
+         notation with overlapping ASCII surface forms. The surface gates below therefore cannot \
+         by themselves exclude a mathematical reading.\n\n",
+    );
+    text.push_str(
+        "| Cohort | Candidates | Exact controls | Mismatch | Pending | Corpus suspect | \
+         Localized `⠴ -> blank` | Reverse `blank -> ⠴` |\n\
+         |---|---:|---:|---:|---:|---:|---:|---:|\n",
+    );
+    for name in [
+        ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD,
+        ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD,
+        KOREAN_PREFIXED_ROMAN_PARENTHETICAL_HYPHEN_SUFFIX,
+    ] {
+        let stats = report
+            .pending_rule_review_clusters
+            .get(name)
+            .expect("registered Roman-entry cohort must exist");
+        let pending = stats
+            .mismatch_primary_classes
+            .get("pending_rule_review")
+            .copied()
+            .unwrap_or(0);
+        let corpus_suspect = stats
+            .mismatch_primary_classes
+            .get("corpus_suspect")
+            .copied()
+            .unwrap_or(0);
+        let target = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2834 ⠴ -> U+2800 ⠀")
+            .copied()
+            .unwrap_or(0);
+        let reverse = stats
+            .first_difference_in_output_signature_transitions
+            .get("U+2800 ⠀ -> U+2834 ⠴")
+            .copied()
+            .unwrap_or(0);
+        text.push_str(&format!(
+            "| `{name}` | {} | {} | {} | {pending} | {corpus_suspect} | {target} | \
+             {reverse} |\n",
+            stats.candidates, stats.exact, stats.mismatch
+        ));
+    }
+    let parenthetical = report
+        .pending_rule_review_clusters
+        .get(ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD)
+        .expect("registered parenthetical-headword cohort must exist");
+    let capital_to_roman = parenthetical
+        .first_difference_in_output_signature_transitions
+        .get("U+2820 ⠠ -> U+2834 ⠴")
+        .copied()
+        .unwrap_or(0);
+    let roman_to_grade1 = parenthetical
+        .first_difference_in_output_signature_transitions
+        .get("U+2834 ⠴ -> U+2830 ⠰")
+        .copied()
+        .unwrap_or(0);
+    text.push_str(&format!(
+        "\nThe whitespace parenthetical-headword cohort also retains {capital_to_roman} localized \
+         `⠠ -> ⠴` and {roman_to_grade1} localized `⠴ -> ⠰` cases as separate transitions; they \
+         are not folded into the target. The exact controls demonstrate that the broad structure \
+         is already correct in many sentences, while the attached parenthetical-hyphen cohort \
+         has no exact control and includes cases already classified by the stricter rule-34 \
+         reference-order contradiction. Consequently none of these measurements authorizes an \
+         engine change; they are deterministic pending/corpus-review diagnostics only.\n\n"
+    ));
     text.push_str(
         "\nThe HCA-style headword-expansion shape described above is not an engine \
          implementation premise. The 2024 PDF's math rule 6 \
@@ -4245,6 +4558,56 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::after_korean_word("연구단, A-STAR 방문", vec!["A-STAR"])]
+    #[case::after_ascii_word("research A-STAR 방문", vec![])]
+    #[case::without_whitespace("연구단,A-STAR 방문", vec![])]
+    #[case::digit_hyphen_is_separate("연구단 F-35 방문", vec![])]
+    #[case::numeric_leading_run("지표 2-CE 결과", vec![])]
+    fn detects_hyphenated_roman_word_after_korean_word(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_hyphenated_word_after_korean_word_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::mixed_case_headword("시스템 ccNC(connected car) 탑재", vec!["ccNC"])]
+    #[case::allcaps_headword("줌 URL(ID : 3) 입력", vec!["URL"])]
+    #[case::after_ascii_word("system URL(ID) 입력", vec![])]
+    #[case::single_letter("시스템 A(x) 입력", vec![])]
+    #[case::nested_parenthetical("시스템 URL(ID(x)) 입력", vec![])]
+    fn detects_parenthetical_roman_headword_after_korean_word(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = roman_parenthetical_headword_after_korean_word_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::attached_structure("퀀텀닷(QD)-OLED 패널", vec!["(QD)-OLED"])]
+    #[case::without_korean_prefix("(QD)-OLED 패널", vec![])]
+    #[case::mixed_case_body("퀀텀닷(Qd)-OLED 패널", vec![])]
+    #[case::single_cap_suffix("퀀텀닷(QD)-O 패널", vec![])]
+    fn detects_korean_prefixed_parenthetical_hyphen_suffix(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = korean_prefixed_roman_parenthetical_hyphen_suffix_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
     #[case::shortform_prefix("가(WD) 나", allcaps_shortform_prefix_spans("가(WD) 나"))]
     #[case::numeric_continuation("가(Li2S) 나", roman_uppercase_after_digit_spans("가(Li2S) 나"))]
     #[case::hyphen_continuation(
@@ -4256,8 +4619,31 @@ mod tests {
         #[case] spans: Vec<InputSpan>,
     ) {
         let actual = braillify::encode_to_unicode(input).expect("grade-1 probe must encode");
-        let ranges = grade1_cohort_signature_ranges(input, &actual, &spans, 1);
+        let ranges = roman_entry_signature_ranges(input, &actual, &spans, 1);
 
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[rstest::rstest]
+    #[case::hyphenated_word(
+        "연구단, A-STAR 방문",
+        roman_hyphenated_word_after_korean_word_spans("연구단, A-STAR 방문")
+    )]
+    #[case::parenthetical_headword(
+        "시스템 ccNC(connected car) 탑재",
+        roman_parenthetical_headword_after_korean_word_spans("시스템 ccNC(connected car) 탑재")
+    )]
+    #[case::attached_parenthetical_suffix(
+        "퀀텀닷(QD)-OLED 패널",
+        korean_prefixed_roman_parenthetical_hyphen_suffix_spans("퀀텀닷(QD)-OLED 패널")
+    )]
+    fn locates_roman_entry_residual_boundary(#[case] input: &str, #[case] spans: Vec<InputSpan>) {
+        let actual = braillify::encode_to_unicode(input).expect("Roman entry probe must encode");
+        let ranges = current_engine_input_entry_ranges(input, &actual, &spans, 2);
+
+        assert_eq!(spans.len(), 1);
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
         assert!(ranges[0].end <= actual.chars().count());
