@@ -581,6 +581,7 @@ const KOREAN_INLINE_PARENTHESIZED_OPERATOR: &str =
     "korean_inline_parenthesized_single_arithmetic_operator";
 const TIGHT_TRIANGLE_BEFORE_KOREAN: &str = "tight_triangle_mark_immediately_before_korean";
 const ALLCAPS_ROMAN_RUN_CONTAINING_OU: &str = "allcaps_roman_run_containing_ou";
+const ALLCAPS_ROMAN_RUN_CONTAINING_ST: &str = "allcaps_roman_run_containing_st";
 const SINGLE_CAPITAL_PARENTHESIZED_DIGITS: &str = "single_capital_followed_by_parenthesized_digits";
 const MIXED_ROMAN_KOREAN_BEFORE_HEADWORD_EXPANSION: &str =
     "mixed_roman_korean_word_before_uppercase_headword_expansion";
@@ -904,7 +905,7 @@ fn is_rule_34_reference_order_contradiction(item: &EncodedCase) -> bool {
 /// This is an input gate for a pronunciation-sensitive UEB diagnostic, not a
 /// claim that the run is an initialism. Alphanumeric outer boundaries exclude
 /// fragments of identifiers while retaining parenthesized and standalone runs.
-fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
+fn allcaps_roman_runs_containing_pair(input: &str, pair: &[u8; 2]) -> Vec<InputSpan> {
     let bytes = input.as_bytes();
     let mut runs = Vec::new();
     let mut cursor = 0;
@@ -928,7 +929,7 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
         let next = input[end_byte..].chars().next();
         if run.len() >= 2
             && run.bytes().all(|byte| byte.is_ascii_uppercase())
-            && run.as_bytes().windows(2).any(|pair| pair == b"OU")
+            && run.as_bytes().windows(2).any(|window| window == pair)
             && previous.is_none_or(|ch| !ch.is_ascii_alphanumeric())
             && next.is_none_or(|ch| !ch.is_ascii_alphanumeric())
         {
@@ -939,6 +940,14 @@ fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
         }
     }
     runs
+}
+
+fn allcaps_roman_runs_containing_ou(input: &str) -> Vec<InputSpan> {
+    allcaps_roman_runs_containing_pair(input, b"OU")
+}
+
+fn allcaps_roman_runs_containing_st(input: &str) -> Vec<InputSpan> {
+    allcaps_roman_runs_containing_pair(input, b"ST")
 }
 
 /// Finds maximal pure-uppercase ASCII letter runs whose beginning is itself a
@@ -1541,6 +1550,23 @@ fn first_difference_in_allcaps_ou_run(item: &EncodedCase) -> bool {
         .any(|range| range.contains(&first_difference))
 }
 
+fn allcaps_st_actual_ranges(input: &str, actual: &str) -> Vec<std::ops::Range<usize>> {
+    current_engine_signature_ranges(input, actual, &allcaps_roman_runs_containing_st(input), 0)
+}
+
+fn first_difference_in_allcaps_st_run(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    if actual == &item.located.case.unicode {
+        return false;
+    }
+    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
+    allcaps_st_actual_ranges(&item.located.case.input, actual)
+        .into_iter()
+        .any(|range| range.contains(&first_difference))
+}
+
 /// Finds a standalone single capital immediately followed by a non-empty,
 /// closed ASCII-digit parenthetical, such as `A(14)`. The span is deliberately
 /// semantic-neutral: prose labels and mathematical function notation can share
@@ -1765,12 +1791,16 @@ fn first_difference_claimed_before_nonletter_parenthetical(item: &EncodedCase) -
         )
 }
 
-fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+fn first_difference_claimed_before_allcaps_st(item: &EncodedCase) -> bool {
     first_difference_claimed_before_nonletter_parenthetical(item)
         || first_difference_at_parenthetical_entry(
             item,
             &roman_parenthetical_after_nonletter_boundary_spans(&item.located.case.input),
         )
+}
+
+fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
+    first_difference_claimed_before_allcaps_st(item) || first_difference_in_allcaps_st_run(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -2373,6 +2403,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            ALLCAPS_ROMAN_RUN_CONTAINING_ST.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ALLCAPS_ROMAN_MIDDLE_DOT_RUNS.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -2542,6 +2576,15 @@ fn analyze(
                 !allcaps_roman_runs_containing_ou(&item.located.case.input).is_empty(),
                 Some(first_difference_in_allcaps_ou_run(item)),
                 false,
+            ),
+            (
+                ALLCAPS_ROMAN_RUN_CONTAINING_ST,
+                !allcaps_roman_runs_containing_st(&item.located.case.input).is_empty(),
+                Some(
+                    !first_difference_claimed_before_allcaps_st(item)
+                        && first_difference_in_allcaps_st_run(item),
+                ),
+                true,
             ),
             (
                 ALLCAPS_ROMAN_MIDDLE_DOT_RUNS,
@@ -3160,7 +3203,10 @@ fn markdown(report: &AnalysisReport) -> String {
          range. The `allcaps_roman_run_containing_ou` gate finds maximal, alphanumeric-delimited \
          uppercase ASCII runs containing adjacent `OU`. It locates the independently encoded run \
          signature in the complete current output and counts only first differences inside that \
-         signature as localized. The `decimal_point_between_ascii_digits` gate finds \
+         signature as localized. The `allcaps_roman_run_containing_st` gate applies the same \
+         output-position requirement to adjacent `ST`; it is kept separate because UEB 10.12 \
+         makes contraction use depend on how an abbreviation or acronym is pronounced. The \
+         `decimal_point_between_ascii_digits` gate finds \
          whitespace-delimited words containing `digit.digit` and reproduces each whole word in a \
          neutral Korean context, so suffixes and punctuation remain part of the current-engine \
          signature. The `compact_numeric_ascii_letter_suffix` gate finds a numeric prefix \
@@ -3754,6 +3800,74 @@ fn markdown(report: &AnalysisReport) -> String {
          not prove a reference correct; it only means that this deterministic contradiction test \
          did not fire.\n",
     );
+    if let Some(stats) = report
+        .pending_rule_review_clusters
+        .get(ALLCAPS_ROMAN_RUN_CONTAINING_ST)
+    {
+        let primary_count = |name: &str| {
+            stats
+                .mismatch_primary_classes
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let localized_transition = |name: &str| {
+            stats
+                .first_difference_in_output_signature_transitions
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        };
+        let raw_transition = |name: &str| {
+            report
+                .pending_first_difference_cell_transitions
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let residual_transition = |name: &str| {
+            report
+                .pending_first_difference_transitions_after_localized_cohorts
+                .get(name)
+                .map(|transition| transition.cases)
+                .unwrap_or(0)
+        };
+        let target = "U+280E ⠎ -> U+280C ⠌";
+        let reverse = "U+280C ⠌ -> U+280E ⠎";
+        text.push_str(&format!(
+            "\n### Uppercase Roman runs containing `ST`\n\n\
+             UEB 10.12.1 (2024 UEB PDF pp.191-192, printed pp.163-164) says not to \
+             use a contraction when letters within an abbreviation or acronym are known to be \
+             pronounced separately, but to use the contraction in case of doubt. Rule 10.12.2 \
+             requires contractions in other abbreviations and acronyms. Consequently an \
+             uppercase `ST` surface alone cannot determine whether `s` + `t` or the `st` \
+             groupsign is required. The current cohort contains {} candidates, {} exact controls, \
+             and {} mismatches; primary classes remain {} `pending_rule_review`, {} \
+             `corpus_suspect`, {} `comparison_method`, and {} \
+             `unsupported_character_review`. Of {} evaluable mismatches, {} are localized to the \
+             detected current-engine run: {} `{target}` and {} `{reverse}`. The target's \
+             raw-to-residual count is {} -> {}, and the reverse is {} -> {}. Exact controls such \
+             as `STAYG`, `KAIST`, `DGIST`, and `POSTECH` coexist with localized mismatches such as \
+             `WSTS`, `HUST`, `OST`, and `USTR`; representative shard/index samples are preserved \
+             in the cluster table. This lexical/pronunciation distinction cannot be inferred from \
+             the input-only spelling, so no engine change or primary reclassification is made.\n",
+            stats.candidates,
+            stats.exact,
+            stats.mismatch,
+            primary_count("pending_rule_review"),
+            primary_count("corpus_suspect"),
+            primary_count("comparison_method"),
+            primary_count("unsupported_character_review"),
+            stats.output_signature_mismatches_evaluated,
+            stats.first_difference_in_output_signature,
+            localized_transition(target),
+            localized_transition(reverse),
+            raw_transition(target),
+            residual_transition(target),
+            raw_transition(reverse),
+            residual_transition(reverse),
+        ));
+    }
     if let Some(stats) = report
         .pending_rule_review_clusters
         .get(UPPERCASE_ROMAN_HYPHEN_DIGITS)
@@ -4826,6 +4940,21 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::internal_pair("WSTS HUST OST USTR", vec!["WSTS", "HUST", "OST", "USTR"])]
+    #[case::lowercase("West", vec![])]
+    #[case::mixed_case("WStS", vec![])]
+    #[case::no_st("WHO", vec![])]
+    #[case::digit_prefix("1WSTS", vec![])]
+    #[case::digit_suffix("WSTS2", vec![])]
+    fn detects_allcaps_roman_runs_containing_st(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let actual = allcaps_roman_runs_containing_st(input)
+            .into_iter()
+            .map(|run| &input[run.start_byte..run.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
     #[case::whole_shortform("가(WD) 나", vec!["WD"])]
     #[case::longer_prefixes("PDS LLM GDP", vec!["PDS", "LLM", "GDP"])]
     #[case::ueb_examples("ALT NEC LLC", vec!["ALT", "NEC", "LLC"])]
@@ -5053,6 +5182,17 @@ mod tests {
         let input = "업무협약(MOU)을 체결했다.";
         let actual = braillify::encode_to_unicode(input).expect("probe must encode");
         let ranges = allcaps_ou_actual_ranges(input, &actual);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].start < ranges[0].end);
+        assert!(ranges[0].end <= actual.chars().count());
+    }
+
+    #[test]
+    fn locates_allcaps_st_signature_in_complete_output() {
+        let input = "통계기구(WSTS)에 따르면";
+        let actual = braillify::encode_to_unicode(input).expect("probe must encode");
+        let ranges = allcaps_st_actual_ranges(input, &actual);
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].start < ranges[0].end);
