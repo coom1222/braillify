@@ -3385,9 +3385,7 @@ fn first_difference_in_tight_triangle(item: &EncodedCase) -> bool {
 /// full stop) but contains no printed space before that suffix. Membership is
 /// descriptive; it does not decide whether orthography may override rule 49's
 /// instruction to follow print spacing.
-fn attached_korean_auxiliary_itda_spans(input: &str) -> Vec<InputSpan> {
-    let mut spans = Vec::new();
-    let mut word_start = 0usize;
+fn has_attached_korean_auxiliary_itda(input: &str) -> bool {
     for word in input.split_inclusive(char::is_whitespace) {
         let body = word.trim_end_matches(char::is_whitespace);
         let suffix = ["있다.", "있다"]
@@ -3397,15 +3395,11 @@ fn attached_korean_auxiliary_itda_spans(input: &str) -> Vec<InputSpan> {
             let suffix_start = body.len() - suffix.len();
             let prefix = &body[..suffix_start];
             if !prefix.is_empty() && prefix.chars().any(is_korean_script) {
-                spans.push(InputSpan {
-                    start_byte: word_start + suffix_start,
-                    end_byte: word_start + body.len(),
-                });
+                return true;
             }
         }
-        word_start += word.len();
     }
-    spans
+    false
 }
 
 fn enum_key<T: Serialize>(value: &T) -> String {
@@ -4060,7 +4054,7 @@ fn analyze(
             ),
             (
                 ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING,
-                !attached_korean_auxiliary_itda_spans(&item.located.case.input).is_empty(),
+                has_attached_korean_auxiliary_itda(&item.located.case.input),
                 None,
                 true,
             ),
@@ -8361,18 +8355,11 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::corpus_attached_suffix("성장을 하고있다.", vec!["있다."])]
-    #[case::pdf_printed_space("그림을 그리고 있다.", vec![])]
-    #[case::independent_suffix("있다.", vec![])]
-    fn detects_only_attached_korean_auxiliary_itda(
-        #[case] input: &str,
-        #[case] expected: Vec<&str>,
-    ) {
-        let actual = attached_korean_auxiliary_itda_spans(input)
-            .into_iter()
-            .map(|span| &input[span.start_byte..span.end_byte])
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
+    #[case::corpus_attached_suffix("성장을 하고있다.", true)]
+    #[case::pdf_printed_space("그림을 그리고 있다.", false)]
+    #[case::independent_suffix("있다.", false)]
+    fn detects_only_attached_korean_auxiliary_itda(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(has_attached_korean_auxiliary_itda(input), expected);
     }
 
     #[test]
