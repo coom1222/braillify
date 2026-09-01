@@ -5885,10 +5885,27 @@ fn markdown(report: &AnalysisReport) -> String {
              pp.90-91) directly prints `O'Hara`, `DON'T`, and `THAT'S` with the apostrophe cell \
              inside the same Roman word; capitals-word mode may end at the apostrophe, but the \
              Roman section itself does not. Detached quotation marks, Korean single quotation \
-             marks, and digit-adjacent measurement signs are excluded. The current diagnostic \
-             has {} candidates, {} exact controls, and {} mismatches. Of {} evaluable mismatches, \
-             {} place their first difference inside the independently encoded mixed-Korean \
-             signature. Membership preserves every primary class.\n",
+             marks, digit-adjacent measurement signs, and an apostrophe at the end of one \
+             whitespace-delimited token before another Roman word are excluded.\n\n\
+             The diagnostic checkpoint had 147 candidates / 0 exact / 147 mismatch. Its \
+             occurrence-specific localizer put 112 first differences on the apostrophe boundary: \
+             30 expected apostrophe cell `U+2804 ⠄` versus actual capital indicator `U+2820 ⠠`, \
+             and 82 expected `U+2804 ⠄` versus actual Roman indicator `U+2834 ⠴`; neither target \
+             had a localized reverse. The implementation keeps only a same-token apostrophe with \
+             ASCII letters immediately on both sides in the current Roman section, delegates its \
+             cell to the existing UEB section-7 punctuation encoder, and restarts capitals mode \
+             for an uppercase run after the nonalphabetic apostrophe. Korean Rule 37 still \
+             suppresses whole-word contractions at a Roman entry. A rejected broader route made \
+             the detached `Guitar' Listening` control exact, so the final gate explicitly does not \
+             look through whitespace.\n\n\
+             After the correction the cohort has {} candidates, {} exact controls, and {} \
+             mismatches. Of {} evaluable residual mismatches, {} place their first difference \
+             inside the independently encoded current signature, but those residual transitions \
+             are other letter/spacing differences rather than either former apostrophe transition. \
+             The complete corpus exact-ID audit found 68 newly exact cases and zero formerly exact \
+             cases lost, raising the corpus total from 69,291 to 69,359. Cohort membership itself \
+             never rewrites a primary class; the engine result may make a member exact or expose \
+             an independently classified residual.\n",
             stats.candidates,
             stats.exact,
             stats.mismatch,
@@ -6984,7 +7001,8 @@ fn markdown(report: &AnalysisReport) -> String {
          | Rules 29/39 Roman-to-Korean mode ownership | 5,141/5,141 | 68,101/83,528 | 81.53% | Same-token Korean is wrapped only in a Roman-majority document or the official dot-delimited `www.대통령.kr` domain shape; all three rule-39 PDF controls remain exact and 386 corpus cases became exact |\n\
          | Rules 29/34 multiword Roman parenthetical continuity | 5,141/5,141 | 68,175/83,528 | 81.62% | A backwards-verified, closed letter-and-space Roman parenthetical tail stays on the prose route; function calls, digits, operators, nested brackets, and punctuation-separated forms remain outside; 74 cases became exact |\n\
          | Rules 29/32/71 ampersand before attached Roman segment | 5,141/5,141 | 68,187/83,528 | 81.63% | Official UEB `&c`, `AT&T`, and `B&B` keep one Roman section across attached `&`; the spaced Korean Rule-71 example, left ASCII alphanumerics, repeated ampersands, and trailing digits delimit the gate; 12 cases became exact |\n\
-         | UEB 8.4.2 capitals-word nonletter boundary | 5,141/5,141 | 69,291/83,528 | 82.96% | Starting from the accepted 68,439-exact checkpoint, capitals-word handling ends at each nonletter and later uppercase runs restart independently; official `AT&T`, `B&B`, `MP3`, and `TVOntario` delimit the token/span boundary; 852 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n",
+         | UEB 8.4.2 capitals-word nonletter boundary | 5,141/5,141 | 69,291/83,528 | 82.96% | Starting from the accepted 68,439-exact checkpoint, capitals-word handling ends at each nonletter and later uppercase runs restart independently; official `AT&T`, `B&B`, `MP3`, and `TVOntario` delimit the token/span boundary; 852 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n\
+         | UEB 8.4.2 same-token internal Roman apostrophe | 5,141/5,141 | 69,359/83,528 | 83.04% | A straight apostrophe stays in the Roman section only with immediate same-token ASCII letters on both sides, while capitals mode restarts for an uppercase suffix; official `O'Hara`, `DON'T`, `THAT'S`, and `SHE'LL` plus detached quote and measurement controls delimit the gate; 68 cases became exact and the complete exact-ID audit found zero former exact cases lost |\n",
     );
     text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \

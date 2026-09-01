@@ -100,7 +100,16 @@ impl BrailleRule for RuleEnglishSymbol {
                 ctx.state.is_english = true;
                 ctx.state.needs_english_continuation = false;
             }
-            if let Some(encoded) = symbol_shortcut::encode_english_char_symbol_shortcut(*sym) {
+            let encoded = if *sym == '\'' {
+                // `use_english_symbol` is true here only for an ASCII apostrophe
+                // immediately between ASCII letters. Keep that narrow UEB 8.4.2
+                // role local instead of making detached straight quotes globally
+                // eligible for the UEB apostrophe cell.
+                crate::rules::english_ueb::rule_7::encode_punctuation(*sym)
+            } else {
+                symbol_shortcut::encode_english_char_symbol_shortcut(*sym)
+            };
+            if let Some(encoded) = encoded {
                 ctx.emit_slice(&encoded);
                 if *sym == '-' && ctx.state.is_english {
                     // UEB 5.7.2의 `CD-ROM`은 순수 대문자 segment 사이의 하이픈

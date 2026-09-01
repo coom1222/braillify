@@ -250,6 +250,17 @@ pub(crate) fn should_render_symbol_as_english(
         // a complete ASCII-letter run so spaced prose, Hangul, and outer
         // alphanumeric continuations keep their existing routes.
         '&' => is_attached_ascii_roman_ampersand(word_chars, index),
+        // UEB 8.4.2 keeps the apostrophe inside the Roman word in its
+        // `O'Hara`, `DON'T`, and `THAT'S` examples. Capitals-word mode may
+        // terminate at this nonalphabetic symbol, but the surrounding Roman
+        // section does not. Detached quotes and digit measurement marks stay
+        // on their existing punctuation routes.
+        '\'' => {
+            prev_char.is_some_and(|ch| ch.is_ascii_alphabetic())
+                && word_chars
+                    .get(index + 1)
+                    .is_some_and(|ch| ch.is_ascii_alphabetic())
+        }
         ',' => {
             if !is_english {
                 return false;
@@ -425,6 +436,40 @@ mod tests {
             should_render_symbol_as_english(true, is_english, &[], ',', &word, 1, &[]),
             expected
         );
+    }
+
+    /// UEB 8.4.2 keeps a word-internal apostrophe inside the Roman section.
+    #[rstest::rstest]
+    #[case::official_name("O'Hara", true)]
+    #[case::official_contraction("DON'T", true)]
+    #[case::official_possessive("THAT'S", true)]
+    #[case::detached_open("'word", false)]
+    #[case::detached_close("word'", false)]
+    #[case::measurement("6'2", false)]
+    fn internal_apostrophe_requires_ascii_letters_on_both_sides(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        let word = input.chars().collect::<Vec<_>>();
+        let index = word.iter().position(|ch| *ch == '\'').unwrap();
+        assert_eq!(
+            should_render_symbol_as_english(true, true, &[], '\'', &word, index, &[]),
+            expected,
+        );
+    }
+
+    #[test]
+    fn apostrophe_does_not_join_the_next_whitespace_delimited_word() {
+        let word = "Guitar'".chars().collect::<Vec<_>>();
+        assert!(!should_render_symbol_as_english(
+            true,
+            true,
+            &[],
+            '\'',
+            &word,
+            word.len() - 1,
+            &["Listening"],
+        ));
     }
 
     /// UEB 3.1.1 keeps attached Roman segments on both sides of `&` in the

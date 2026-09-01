@@ -93,8 +93,10 @@ impl BrailleRule for Rule28 {
         // alphabet signs and multi-letter groupsigns, while suppressing UEB
         // whole-word contractions. Encode each contiguous ASCII letter run in
         // one pass so the shared UEB preference/morphology algorithm can choose
-        // contractions across the whole word. Apostrophe continuations retain
-        // the legacy position-aware path because they are not fresh word starts.
+        // contractions across the whole word. Lowercase apostrophe continuations
+        // retain the legacy position-aware path because they are not fresh word
+        // starts. An uppercase continuation is encoded as a run so UEB 8.4.2 can
+        // restart capitals mode after the nonalphabetic apostrophe.
         let starts_ascii_run = c.is_ascii_alphabetic()
             && ctx
                 .index
@@ -106,7 +108,7 @@ impl BrailleRule for Rule28 {
             .checked_sub(1)
             .and_then(|index| ctx.word_chars.get(index))
             .is_some_and(|previous| matches!(previous, '\'' | '\u{2019}'));
-        if starts_ascii_run && !follows_apostrophe {
+        if starts_ascii_run && (!follows_apostrophe || c.is_ascii_uppercase()) {
             let run_end = ctx.index
                 + ctx.word_chars[ctx.index..]
                     .iter()
@@ -304,6 +306,23 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    /// UEB 8.4.2 keeps an internal apostrophe in the Roman letters-sequence but
+    /// terminates capitals-word mode at that nonalphabetic symbol. The Roman
+    /// surfaces are official UEB examples; the neutral Korean wrapper exercises
+    /// Rule 28/29 routing. Korean Rule 37 still suppresses the `that` wordsign in
+    /// `THAT'S`, so its initial run retains the permitted `th` groupsign instead.
+    #[rstest::rstest]
+    #[case::official_name("가 O'Hara 나", "⠫⠀⠴⠠⠕⠄⠠⠓⠜⠁⠲⠀⠉")]
+    #[case::official_contraction("가 DON'T 나", "⠫⠀⠴⠠⠠⠙⠕⠝⠄⠠⠞⠲⠀⠉")]
+    #[case::official_possessive("가 THAT'S 나", "⠫⠀⠴⠠⠠⠹⠁⠞⠄⠠⠎⠲⠀⠉")]
+    #[case::official_two_letter_suffix("가 SHE'LL 나", "⠫⠀⠴⠠⠠⠩⠑⠄⠠⠠⠇⠇⠲⠀⠉")]
+    fn korean_wrapper_restarts_capitals_after_internal_apostrophe(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(crate::encode_to_unicode(input).as_deref(), Ok(expected));
     }
 
     #[test]
