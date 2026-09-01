@@ -2770,7 +2770,6 @@ fn first_difference_claimed_by_localized_cohort(item: &EncodedCase) -> bool {
         || first_difference_at_spaced_numeric_list_comma(item)
         || first_difference_at_ascii_roman_comma_before_digit_korean(item)
         || first_difference_at_percent_point_unit_list_comma(item)
-        || first_difference_at_attached_korean_auxiliary_itda_spacing(item)
 }
 
 /// Input-only candidate gate for acronym expansions such as
@@ -3407,38 +3406,6 @@ fn attached_korean_auxiliary_itda_spans(input: &str) -> Vec<InputSpan> {
         word_start += word.len();
     }
     spans
-}
-
-/// Locates only a blank inserted immediately before `있다`, using the real
-/// input prefix rather than any reference cell. After the rule-49 correction,
-/// this deliberately returns no ranges for the affected inputs.
-fn attached_korean_auxiliary_itda_actual_ranges(
-    input: &str,
-    actual: &str,
-) -> Vec<std::ops::Range<usize>> {
-    let actual_cells = actual.chars().collect::<Vec<_>>();
-    let mut ranges = Vec::new();
-    for span in attached_korean_auxiliary_itda_spans(input) {
-        let prefix = braillify::encode_to_unicode(&input[..span.start_byte])
-            .expect("an encodable sentence must have an encodable prefix");
-        let start = prefix.chars().count();
-        if actual_cells.get(start) == Some(&'⠀') {
-            ranges.push(start..start + 1);
-        }
-    }
-    ranges
-}
-
-fn first_difference_at_attached_korean_auxiliary_itda_spacing(item: &EncodedCase) -> bool {
-    let Ok(actual) = &item.actual else {
-        return false;
-    };
-    if actual == &item.located.case.unicode {
-        return false;
-    }
-    let first_difference = first_difference_cell(&item.located.case.unicode, actual);
-    attached_korean_auxiliary_itda_actual_ranges(&item.located.case.input, actual)
-        .contains(&(first_difference..first_difference + 1))
 }
 
 fn enum_key<T: Serialize>(value: &T) -> String {
@@ -4094,9 +4061,7 @@ fn analyze(
             (
                 ATTACHED_KOREAN_AUXILIARY_ITDA_SPACING,
                 !attached_korean_auxiliary_itda_spans(&item.located.case.input).is_empty(),
-                Some(first_difference_at_attached_korean_auxiliary_itda_spacing(
-                    item,
-                )),
+                None,
                 true,
             ),
             (
@@ -4748,10 +4713,10 @@ fn markdown(report: &AnalysisReport) -> String {
          `tight_triangle_mark_immediately_before_korean` gate requires literal \
          `△한글` with no input space and includes the first following Korean cell in its localized \
          output range, so an observed missing-space difference is measured at the mark boundary. \
-         The `attached_korean_auxiliary_itda_spacing` gate mirrors the former normalization \
-         shape for a Korean token ending in attached `있다`; its localizer independently encodes \
-         the real prefix and claims only the blank inserted before the suffix. It does not decide \
-         whether orthographic correction may override the printed input.\n\n",
+         The `attached_korean_auxiliary_itda_spacing` gate is input-only after the rule-49 \
+         correction: it measures Korean tokens ending in attached `있다` without claiming a \
+         current output signature or deciding whether orthographic correction may override the \
+         printed input.\n\n",
     );
     text.push_str(
         "| Cluster | Candidates | Exact | Mismatch | Conflicting-reference cases |\n\
@@ -8408,37 +8373,6 @@ mod tests {
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn current_engine_does_not_insert_blank_before_attached_itda() {
-        let input = "성장을 하고있다.";
-        let actual = braillify::encode_to_unicode(input).expect("spacing probe must encode");
-        let ranges = attached_korean_auxiliary_itda_actual_ranges(input, &actual);
-
-        assert!(ranges.is_empty());
-    }
-
-    #[test]
-    fn localizes_a_blank_inserted_before_attached_itda() {
-        let input = "성장을 하고있다.";
-        let span = attached_korean_auxiliary_itda_spans(input)
-            .into_iter()
-            .next()
-            .expect("probe must contain the attached suffix");
-        let prefix = braillify::encode_to_unicode(&input[..span.start_byte]).unwrap();
-        let start = prefix.chars().count();
-        let mut actual = braillify::encode_to_unicode(input).unwrap();
-        let insert_at = actual
-            .char_indices()
-            .nth(start)
-            .map_or(actual.len(), |(byte, _)| byte);
-        actual.insert(insert_at, '⠀');
-
-        assert_eq!(
-            attached_korean_auxiliary_itda_actual_ranges(input, &actual),
-            vec![start..start + 1]
-        );
     }
 
     #[test]

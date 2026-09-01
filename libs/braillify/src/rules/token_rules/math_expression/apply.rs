@@ -192,7 +192,13 @@ fn is_multiword_closed_roman_parenthetical_tail(
                     {
                         return false;
                     }
-                    return !before.contains('(') && !before.contains(')');
+                    if before.contains('(') {
+                        return false;
+                    }
+                    if before.contains(')') {
+                        return false;
+                    }
+                    return true;
                 }
                 if previous_text.chars().all(|ch| ch.is_ascii_alphabetic()) {
                     cursor = i.checked_sub(1);
@@ -917,6 +923,8 @@ mod tests {
     #[case::digit_after_opening("(2Romeo Juliet)", false)]
     #[case::digit_in_earlier_fragment("(Romeo2 Juliet)", false)]
     #[case::nonletter_earlier_without_opening("Romeo2 Juliet More)", false)]
+    #[case::nested_opening_before_fragment("((Romeo Juliet)", false)]
+    #[case::closing_before_opening(")(Romeo Juliet)", false)]
     fn recognizes_only_complete_multiword_roman_parenthetical_tails(
         #[case] input: &str,
         #[case] expected: bool,
