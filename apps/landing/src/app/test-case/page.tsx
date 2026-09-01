@@ -34,7 +34,7 @@ import {
   TEST_CASE_FILTERS,
   TEST_CASE_FILTERS_MAP,
 } from '@/constants'
-import type { TestStatusMap, TestStatusPageManifest } from '@/types'
+import type { TestStatusMap } from '@/types'
 
 export const metadata: Metadata = {
   title: '테스트 케이스 - 한국·영어 점자 표준 검증',
@@ -83,16 +83,13 @@ export const metadata: Metadata = {
 }
 
 export default async function TestCasePage() {
-  const [testStatus, ruleMap, testStatusPageManifest] = await Promise.all([
+  const [testStatus, ruleMap] = await Promise.all([
     readFile('../../test_status.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<TestStatusMap>,
     readFile('../../rule_map.json', 'utf-8').then((data) =>
       JSON.parse(data),
     ) as Promise<Record<string, { title: string; description: string }>>,
-    readFile('public/test-status/manifest.json', 'utf-8').then((data) =>
-      JSON.parse(data),
-    ) as Promise<TestStatusPageManifest>,
   ])
 
   // Dynamically create filter map based on rule_map keys
@@ -175,10 +172,8 @@ export default async function TestCasePage() {
               </Text>
             </VStack>
             <TestCaseResults
-              pageInfo={testStatusPageManifest[key]}
+              pageSize={category === 'corpus' ? 250 : undefined}
               results={testStatus[key][6]}
-              statusKey={key}
-              total={testStatus[key][0]}
             />
           </TestCaseRuleContainer>
           {currentClause !== nextClause && (
@@ -190,11 +185,7 @@ export default async function TestCasePage() {
   })
 
   return (
-    <TestCaseProvider
-      filterMap={filterMap}
-      filterTotalMap={filterTotalMap}
-      testStatusMap={testStatus}
-    >
+    <TestCaseProvider filterMap={filterMap} filterTotalMap={filterTotalMap}>
       <SideBarProvider>
         <Box maxW="1520px" mx="auto" pb="40px" w="100%">
           <VStack
