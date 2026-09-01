@@ -752,7 +752,7 @@ fn first_difference_in_compact_numeric_ascii_suffix_spans(
         return false;
     }
     let first_difference = first_difference_cell(&item.located.case.unicode, actual);
-    korean_context_signature_ranges(&item.located.case.input, actual, spans, 0)
+    korean_context_signature_ranges(&item.located.case.input, actual, spans, 1)
         .into_iter()
         .any(|range| range.contains(&first_difference))
 }
@@ -2356,7 +2356,8 @@ fn markdown(report: &AnalysisReport) -> String {
          whitespace-delimited words containing `digit.digit` and reproduces each whole word in a \
          neutral Korean context, so suffixes and punctuation remain part of the current-engine \
          signature. The `compact_numeric_ascii_letter_suffix` gate finds a numeric prefix \
-         immediately followed by ASCII letters and retains suffix-specific outcome counts. It \
+         immediately followed by ASCII letters, includes the immediately preceding output cell \
+         as its entry boundary, and retains suffix-specific outcome counts. It \
          intentionally includes both possible rule-69 units and ambiguous variable/identifier \
          forms; membership alone does not assign unit semantics. The \
          `rule69_ascii_unit_before_terminator_skipping_symbol` gate is narrower: it accepts only \
@@ -2631,8 +2632,9 @@ fn markdown(report: &AnalysisReport) -> String {
             "\nCurrent compact numeric+ASCII-suffix measurement: {} candidates, {} exact \
              controls, {} mismatches, {pending} members in the actual `pending_rule_review` \
              subcluster, and {}/{} evaluable mismatches whose first difference is inside the \
-             complete current-engine output signature. Rule 40 requires the numeric indicator \
-             and rule 69 requires Roman indicators around a Roman-written unit, but the input \
+             complete current-engine output signature or its immediate entry boundary. Rule 40 \
+             requires the numeric indicator and rule 69 requires Roman indicators around a \
+             Roman-written unit, but the input \
              shape alone cannot prove that every ASCII suffix is a unit.\n\n",
             stats.candidates,
             stats.exact,
@@ -2664,6 +2666,39 @@ fn markdown(report: &AnalysisReport) -> String {
                 suffix_stats.first_difference_in_output_signature
             ));
         }
+        text.push_str(
+            "\nEntry-boundary pre-fix baseline: 2,975 candidates, 1,649 exact controls, 1,326 \
+             mismatches, 1,259 pending members, and 356 localized first differences; the \
+             dominant reference number-sign versus current space transition accounted for 296 \
+            cases. Rules 68 and 69 already accept semantic Unicode compatibility-unit forms. \
+             The implementation derives compact ASCII spellings only from their all-letter NFKC \
+             decompositions, reuses the owning rule's PDF-defined cells, chooses the longest \
+             complete spelling, and rejects partial suffix matches. It does not extend \
+             recognition to separated English words or arbitrary corpus suffixes. The same \
+             cohort now has 1,759 exact controls, 1,216 mismatches, 1,148 pending members, and \
+             261 localized first differences; corpus-wide exact matches moved from 66,436 to \
+             66,546 (+110). Rule 69's printed `160㎎/㎗` example directly controls `160mg`; the \
+             additional full-encoder `240mg`/`240㎎` pair proves that recognition is invariant \
+             to the numeric value and also passes. Rule 68's printed `10,000㎡는 1㏊이다` example \
+             controls the `ha` spelling through U+33CA's NFKC decomposition; `15.2ha`/`15.2㏊` \
+             now passes without a spelling-specific output branch. The 53-case `ha` suffix \
+             control moved from 0 exact to 18 exact; its remaining 35 mismatches have independent \
+             later or surrounding differences. A full U+3300..U+33FF owner audit found 73 \
+             Rules 68/69 glyphs with pure-ASCII NFKC decompositions, 73 distinct spellings, and \
+             therefore no current duplicate-spelling owner collision. Production nevertheless \
+             groups every owner before resolution and excludes a spelling if any owner cells \
+             differ; a synthetic collision test proves that this is not first-wins behavior. An \
+             exhaustive test also compares every one of the 73 derived spellings with every \
+             owner glyph at both the unit-cell and full-encoder boundaries in a neutral Korean \
+             measurement context. That audit exposed \
+             the pre-existing explicit `cal` mapping's missing ordinary terminator; rule 69 \
+             requires the terminator, while the existing slash-boundary function removes it for \
+             the printed `cal/㎠/min` context. Restoring the ordinary terminator and extending \
+             that slash-continuation boundary made the audit pass without changing the \
+             corpus-wide 66,546 exact total. Ambiguous pure-English inputs remain on UEB: the \
+             standard controls `3m` and `4.m` are retained and pass, rather than being globally \
+             forced into a Korean unit route.\n",
+        );
     }
     if let Some(stats) = report
         .pending_rule_review_clusters
@@ -3162,6 +3197,9 @@ fn markdown(report: &AnalysisReport) -> String {
         "| Rules 33/34/69 Roman-unit punctuation boundary | 5,141/5,141 | 66,436/83,528 | 79.54% | Rule-69 units retain their ordinary terminator at end/Korean/slash boundaries but omit it before rule-33/34 punctuation or enclosing marks; compact unit tokens with that boundary stay off the math path; 397 cases became exact |\n",
     );
     text.push_str(
+        "| Rules 68/69 compact compatibility-derived ASCII units | 5,141/5,141 | 66,546/83,528 | 79.67% | Compact ASCII unit spellings are derived from the engine's already accepted Unicode compatibility-unit forms and reuse their owning-rule cells, with longest-complete matching and no expansion to separated English words; `160mg`, numeric-invariance control `240mg`, and Rule-68 `ha` controls are retained; 110 cases became exact |\n",
+    );
+    text.push_str(
         "\nThe latest full `cargo test -p braillify test_by_testcase --release -- --nocapture` \
          run was accepted from its custom testcase summary, not the trailing filtered harness: \
          `총 테스트 케이스: 5141`, `성공: 5141`, `실패: 0`, and \
@@ -3428,18 +3466,21 @@ mod tests {
     }
 
     #[test]
-    fn locates_compact_numeric_ascii_suffix_in_current_output() {
+    fn locates_compact_numeric_ascii_suffix_and_entry_boundary_in_current_output() {
         let input = "용량은 13GWh 규모다.";
         let actual = braillify::encode_to_unicode(input).expect("compact suffix probe must encode");
-        let ranges = korean_context_signature_ranges(
-            input,
-            &actual,
-            &compact_numeric_ascii_suffix_spans(input),
-            0,
-        );
+        let spans = compact_numeric_ascii_suffix_spans(input);
+        let ranges = korean_context_signature_ranges(input, &actual, &spans, 1);
+        let signature = korean_context_signature(&input[spans[0].start_byte..spans[0].end_byte])
+            .expect("compact suffix signature must encode");
+        let signature_start_byte = actual
+            .find(&signature)
+            .expect("current output must contain compact suffix signature");
+        let signature_start = actual[..signature_start_byte].chars().count();
 
         assert_eq!(ranges.len(), 1);
-        assert!(ranges[0].start < ranges[0].end);
+        assert_eq!(ranges[0].start + 1, signature_start);
+        assert_eq!(ranges[0].end, signature_start + signature.chars().count());
     }
 
     #[rstest::rstest]

@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
 use crate::char_struct::CharType;
 use crate::rules::RuleMeta;
 use crate::rules::context::RuleContext;
@@ -32,7 +35,7 @@ const ASCII_UNIT_MAPPINGS: &[(&str, &str)] = &[
     ("in", "⠴⠊⠝⠲"),
     ("mm", "⠴⠍⠍⠲"),
     ("min", "⠍⠔⠲"),
-    ("cal", "⠴⠉⠁⠇"),
+    ("cal", "⠴⠉⠁⠇⠲"),
     ("GB", "⠴⠠⠠⠛⠃⠲"),
     ("m", "⠴⠍⠲"),
     ("h", "⠴⠓⠲"),
@@ -229,15 +232,98 @@ fn chars_start_with_ascii(tail: &[char], s: &str) -> bool {
     s.bytes().zip(tail.iter()).all(|(b, c)| (b as char) == *c)
 }
 
+/// ASCII spellings that are canonically exposed by the same Unicode
+/// compatibility-unit family already accepted above. This derives the unit
+/// lexicon from semantic unit code points instead of maintaining a second
+/// corpus-shaped list (`㎞` -> `km`, `㎎` -> `mg`, `㎾` -> `kW`, ...).
+fn compatibility_ascii_unit_candidate(glyph: char) -> Option<(String, Vec<u8>)> {
+    let parts = glyph.to_string().nfkc().collect::<Vec<_>>();
+    if !parts.iter().all(char::is_ascii_alphabetic) {
+        return None;
+    }
+    let encoded = if compatibility_unit_decomposition(glyph).is_some() {
+        encode_compatibility_unit(&parts, true, true).ok()?
+    } else {
+        super::rule_68::encode_rule_68_symbol(glyph)?
+    };
+    Some((parts.into_iter().collect(), encoded))
+}
+
+fn compatibility_ascii_unit_owners() -> BTreeMap<String, Vec<(char, Vec<u8>)>> {
+    let mut by_spelling = BTreeMap::<String, Vec<(char, Vec<u8>)>>::new();
+    for glyph in (0x3300..=0x33ff).filter_map(char::from_u32) {
+        if let Some((spelling, encoded)) = compatibility_ascii_unit_candidate(glyph) {
+            by_spelling
+                .entry(spelling)
+                .or_default()
+                .push((glyph, encoded));
+        }
+    }
+    by_spelling
+}
+
+fn retain_unambiguous_ascii_unit_spellings(
+    owners_by_spelling: BTreeMap<String, Vec<(char, Vec<u8>)>>,
+) -> Vec<(String, Vec<u8>)> {
+    let mut spellings = owners_by_spelling
+        .into_iter()
+        .filter_map(|(spelling, owners)| {
+            let first = &owners.first()?.1;
+            owners
+                .iter()
+                .all(|(_, encoded)| encoded == first)
+                .then(|| (spelling, first.clone()))
+        })
+        .collect::<Vec<_>>();
+    spellings.sort_by(|left, right| {
+        right
+            .0
+            .len()
+            .cmp(&left.0.len())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    spellings
+}
+
+fn compatibility_ascii_unit_spellings() -> &'static [(String, Vec<u8>)] {
+    static SPELLINGS: OnceLock<Vec<(String, Vec<u8>)>> = OnceLock::new();
+    SPELLINGS
+        .get_or_init(|| retain_unambiguous_ascii_unit_spellings(compatibility_ascii_unit_owners()))
+}
+
 pub(crate) fn encode_ascii_unit(word: &[char], index: usize) -> Option<(Vec<u8>, usize)> {
     let tail = &word[index..];
-    for (unit, unicode) in ASCII_UNIT_MAPPINGS {
-        if !chars_start_with_ascii(tail, unit) {
-            continue;
+    ASCII_UNIT_MAPPINGS
+        .iter()
+        .filter(|(unit, _)| chars_start_with_ascii(tail, unit))
+        .max_by_key(|(unit, _)| unit.len())
+        .map(|(unit, unicode)| (encode_unicode_cells(unicode), unit.len()))
+}
+
+/// Numeric-compact Rule 69 path. Compatibility-derived spellings are limited
+/// to this measured boundary so an unrelated English word after a separated
+/// number cannot become a unit merely because it starts with a unit spelling.
+fn encode_numeric_ascii_unit(word: &[char], index: usize) -> Option<(Vec<u8>, usize)> {
+    let tail = &word[index..];
+    let explicit = encode_ascii_unit(word, index);
+    let derived = compatibility_ascii_unit_spellings()
+        .iter()
+        .filter(|(unit, _)| chars_start_with_ascii(tail, unit))
+        .max_by_key(|(unit, _)| unit.len());
+
+    if let Some((encoded, consumed)) = explicit {
+        match derived {
+            Some((candidate, derived_encoded)) if consumed == candidate.len() => {
+                return (encoded.as_slice() == derived_encoded.as_slice())
+                    .then_some((encoded, consumed));
+            }
+            Some((candidate, _)) if consumed < candidate.len() => {}
+            _ => return Some((encoded, consumed)),
         }
-        return Some((encode_unicode_cells(unicode), unit.len()));
     }
-    None
+
+    let (unit, encoded) = derived?;
+    Some((encoded.clone(), unit.len()))
 }
 
 fn encode_percent_abbreviation(word: &[char], index: usize) -> Option<(Vec<u8>, usize)> {
@@ -268,7 +354,13 @@ pub(crate) fn parse_numeric_ascii_unit_prefix(word: &[char]) -> Option<(String, 
     }
 
     let numeric = word[..numeric_len].iter().collect::<String>();
-    let (unit, consumed) = encode_ascii_unit(word, numeric_len)?;
+    let (unit, consumed) = encode_numeric_ascii_unit(word, numeric_len)?;
+    if word
+        .get(numeric_len + consumed)
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+    {
+        return None;
+    }
     Some((numeric, unit, numeric_len + consumed))
 }
 
@@ -291,9 +383,14 @@ fn omit_roman_terminator_before_boundary(
     word: &[char],
     boundary_index: usize,
 ) {
-    if word
+    let skips_for_punctuation = word
         .get(boundary_index)
-        .is_some_and(|symbol| crate::english_logic::should_skip_terminator_for_symbol(*symbol))
+        .is_some_and(|symbol| crate::english_logic::should_skip_terminator_for_symbol(*symbol));
+    let continues_through_slash = word.get(boundary_index) == Some(&'/')
+        && word
+            .get(boundary_index + 1)
+            .is_some_and(|next| is_roman_unit_component(*next));
+    if (skips_for_punctuation || continues_through_slash)
         && encoded.last() == Some(&crate::unicode::decode_unicode('⠲'))
     {
         encoded.pop();
@@ -441,10 +538,11 @@ impl BrailleRule for Rule69 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Rule69, compatibility_unit_decomposition, encode_ascii_unit, encode_compatibility_unit,
+        Rule69, compatibility_ascii_unit_owners, compatibility_unit_decomposition,
+        encode_ascii_unit, encode_compatibility_unit, encode_numeric_ascii_unit,
         encode_percent_abbreviation, encode_rule_69_unit_letters, encode_unicode_cells,
         omit_roman_terminator_before_boundary, parse_numeric_ascii_unit_prefix,
-        word_looks_like_unit_chain,
+        retain_unambiguous_ascii_unit_spellings, word_looks_like_unit_chain,
     };
 
     #[rstest::rstest]
@@ -523,6 +621,104 @@ mod tests {
             }
             encode_compatibility_unit(&parts, true, true).unwrap();
         }
+    }
+
+    #[test]
+    fn every_rule_68_or_69_ascii_derivation_matches_every_owner_glyph() {
+        for (spelling, owners) in compatibility_ascii_unit_owners() {
+            let first = &owners[0].1;
+            for (glyph, owner_encoding) in &owners {
+                assert_eq!(
+                    owner_encoding, first,
+                    "conflicting owner cells for NFKC spelling {spelling:?}: U+{:04X}",
+                    *glyph as u32
+                );
+
+                let chars = spelling.chars().collect::<Vec<_>>();
+                let (derived, consumed) = encode_numeric_ascii_unit(&chars, 0)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "unambiguous ASCII compatibility-unit spelling {spelling:?} from U+{:04X} must be recognized",
+                            *glyph as u32
+                        )
+                    });
+                assert_eq!(consumed, spelling.len(), "partial match for {spelling}");
+                assert_eq!(
+                    &derived, owner_encoding,
+                    "derived cells differ from owner U+{:04X} for {spelling}",
+                    *glyph as u32
+                );
+
+                let ascii_input = format!("값은 1{spelling}이다");
+                let glyph_input = format!("값은 1{glyph}이다");
+                assert_eq!(
+                    crate::encode_to_unicode(&ascii_input).unwrap(),
+                    crate::encode_to_unicode(&glyph_input).unwrap(),
+                    "full encoder differs for {spelling} and owner U+{:04X}",
+                    *glyph as u32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn conflicting_nfkc_owner_cells_are_excluded_instead_of_first_wins() {
+        let owners = std::collections::BTreeMap::from([
+            (
+                "safe".to_string(),
+                vec![('A', vec![1, 2]), ('B', vec![1, 2])],
+            ),
+            ("conflict".to_string(), vec![('C', vec![3]), ('D', vec![4])]),
+        ]);
+
+        let resolved = retain_unambiguous_ascii_unit_spellings(owners);
+
+        assert!(resolved.iter().any(|(spelling, _)| spelling == "safe"));
+        assert!(resolved.iter().all(|(spelling, _)| spelling != "conflict"));
+    }
+
+    #[rstest::rstest]
+    #[case::kilometre("80km", "80㎞")]
+    #[case::pdf_milligram("160mg", "160㎎")]
+    #[case::numeric_invariance_milligram("240mg", "240㎎")]
+    #[case::kilowatt("30kW", "30㎾")]
+    #[case::megahertz("96.7MHz", "96.7㎒")]
+    #[case::hectare("15.2ha", "15.2㏊")]
+    fn compact_ascii_units_match_supported_compatibility_forms(
+        #[case] ascii: &str,
+        #[case] compatibility: &str,
+    ) {
+        let ascii = format!("값은 {ascii}이다");
+        let compatibility = format!("값은 {compatibility}이다");
+        assert_eq!(
+            crate::encode_to_unicode(&ascii).unwrap(),
+            crate::encode_to_unicode(&compatibility).unwrap()
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::letter_after_digit("3m", "⠼⠉⠍")]
+    #[case::letter_after_decimal_punctuation("4.m", "⠼⠙⠲⠍")]
+    fn pure_english_ambiguous_suffixes_remain_on_ueb_path(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::longest_derived("30mW", 4)]
+    #[case::hectare_derived("15.2ha", 6)]
+    #[case::reject_partial_suffix("30kWh", 0)]
+    fn parses_only_complete_compatibility_derived_units(
+        #[case] input: &str,
+        #[case] expected_consumed: usize,
+    ) {
+        let chars = input.chars().collect::<Vec<_>>();
+        assert_eq!(
+            parse_numeric_ascii_unit_prefix(&chars).map_or(0, |(_, _, consumed)| consumed),
+            expected_consumed
+        );
     }
 
     #[rstest::rstest]
@@ -606,6 +802,7 @@ mod tests {
     /// the ordinary Roman terminator.
     #[rstest::rstest]
     #[case::end_of_input("180cm", "⠴⠉⠍⠲")]
+    #[case::calorie_at_end("열량은 3cal", "⠴⠉⠁⠇⠲")]
     #[case::before_korean("1m는", "⠴⠍⠲")]
     #[case::before_forced_slash("3m/시", "⠴⠍⠲⠸⠌")]
     fn retains_unit_terminator_at_ordinary_rule_69_boundary(

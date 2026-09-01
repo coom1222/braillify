@@ -47,6 +47,16 @@ pub fn is_rule_68_symbol(c: char) -> bool {
     MAPPINGS.iter().any(|(candidate, _)| *candidate == c)
 }
 
+/// Return the PDF-defined cells for a single Rule 68 symbol. Rule 69 reuses
+/// this owning-rule encoding when a supported compatibility unit has a pure
+/// ASCII NFKC spelling (for example, the `ha` spelling of `㏊`).
+pub(crate) fn encode_rule_68_symbol(c: char) -> Option<Vec<u8>> {
+    MAPPINGS
+        .iter()
+        .find(|(candidate, _)| *candidate == c)
+        .map(|(_, unicode)| encode_unicode_cells(unicode))
+}
+
 fn is_superscript_symbol(c: char) -> bool {
     matches!(c, '⁺' | '⁻')
 }
@@ -214,13 +224,9 @@ impl BrailleRule for Rule68 {
             return Ok(RuleResult::Consumed);
         }
 
-        let Some((_, unicode)) = MAPPINGS
-            .iter()
-            .find(|(candidate, _)| *candidate == ctx.current_char())
-        else {
+        let Some(encoded) = encode_rule_68_symbol(ctx.current_char()) else {
             return Ok(RuleResult::Skip);
         };
-        let encoded = encode_unicode_cells(unicode);
         ctx.emit_slice(&encoded);
         if should_insert_separator_after_symbol(ctx) {
             ctx.emit(0);

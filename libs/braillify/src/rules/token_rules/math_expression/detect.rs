@@ -317,6 +317,11 @@ mod tests {
     /// attached to the compact unit token without turning the unit into math.
     #[rstest::rstest]
     #[case::ordinary_unit("180cm", false)]
+    #[case::derived_kilometre("80km", false)]
+    #[case::derived_milligram("240mg", false)]
+    #[case::derived_kilowatt("30kW", false)]
+    #[case::derived_megahertz("96.7MHz", false)]
+    #[case::derived_hectare("15.2ha", false)]
     #[case::unit_before_comma("173cm,", false)]
     #[case::unit_before_closing_parenthesis("20kg)", false)]
     #[case::unit_before_period("130m.", false)]
