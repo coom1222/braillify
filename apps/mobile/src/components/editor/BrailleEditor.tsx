@@ -13,13 +13,11 @@ import {
 } from '@/lib/braille-editor'
 import { copyText } from '@/lib/clipboard'
 
-const DOT_LAYOUT = [1, 2, 3, 4, 5, 6] as const
-
-const COPY_LABEL = {
+const COPY_LABEL: Record<CopyState, string> = {
   copied: '복사됨',
   error: '복사 실패',
   idle: '복사',
-} as const satisfies Record<CopyState, string>
+}
 
 export function BrailleEditor() {
   const [cells, setCells] = useState<number[]>([0])
@@ -108,12 +106,9 @@ export function BrailleEditor() {
         </Flex>
         <Box
           aria-live="polite"
-          fontFamily="Segoe UI Symbol, sans-serif"
-          fontSize="32px"
-          letterSpacing="4px"
-          lineHeight="1.4"
           minH="64px"
           py="6px"
+          typography="braillePreview"
           wordBreak="break-all"
         >
           {preview}
@@ -254,26 +249,29 @@ function EditableBrailleCell({
           gridTemplateColumns="repeat(2, 22px)"
           gridTemplateRows="repeat(3, 22px)"
         >
-          {DOT_LAYOUT.map((dot) => {
-            const active = (mask & (1 << (dot - 1))) !== 0
+          {Array(6)
+            .fill(0)
+            .map((_, dotIndex) => {
+              const dot = (dotIndex + 1) as DotNumber
+              const active = (mask & (1 << (dot - 1))) !== 0
 
-            return (
-              <Button
-                key={dot}
-                aria-label={`${index + 1}번 셀 점 ${dot}`}
-                aria-pressed={active}
-                bg={active ? '$primary' : '$containerBackground'}
-                border="1.5px solid $border"
-                borderRadius="50%"
-                cursor="pointer"
-                h="22px"
-                onClick={() => onToggleDot(dot)}
-                p="0"
-                type="button"
-                w="22px"
-              />
-            )
-          })}
+              return (
+                <Button
+                  key={dot}
+                  aria-label={`${index + 1}번 셀 점 ${dot}`}
+                  aria-pressed={active}
+                  bg={active ? '$primary' : '$containerBackground'}
+                  border="1.5px solid $border"
+                  borderRadius="50%"
+                  cursor="pointer"
+                  h="22px"
+                  onClick={() => onToggleDot(dot)}
+                  p="0"
+                  type="button"
+                  w="22px"
+                />
+              )
+            })}
         </Grid>
       </Box>
       <Button

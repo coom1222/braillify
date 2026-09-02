@@ -26,13 +26,7 @@ export function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
         minH="142px"
         px={['26px', null, null, '34px']}
       >
-        <Text
-          aria-hidden="true"
-          color="$sidebarText"
-          fontFamily="Segoe UI Symbol, sans-serif"
-          fontSize="38px"
-          lineHeight="1"
-        >
+        <Text aria-hidden="true" color="$sidebarText" typography="brandIcon">
           ⠿
         </Text>
         <VStack gap="2px">
@@ -71,9 +65,7 @@ export function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
               <Text
                 aria-hidden="true"
                 color="currentColor"
-                fontFamily="Segoe UI Symbol, sans-serif"
-                fontSize="26px"
-                lineHeight="1"
+                typography="sidebarIcon"
               >
                 {item.symbol}
               </Text>

@@ -30,17 +30,13 @@ export function HistoryPanel() {
   const visibleEntries = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
 
-    return entries
-      .filter((entry) => (tab === 'favorites' ? entry.favorite : true))
-      .filter((entry) => {
-        if (!normalizedQuery) {
-          return true
-        }
-        return (
+    return entries.filter(
+      (entry) =>
+        (tab !== 'favorites' || entry.favorite) &&
+        (!normalizedQuery ||
           entry.input.toLowerCase().includes(normalizedQuery) ||
-          entry.result.toLowerCase().includes(normalizedQuery)
-        )
-      })
+          entry.result.toLowerCase().includes(normalizedQuery)),
+    )
   }, [entries, query, tab])
 
   const copyEntry = async (entry: HistoryEntry) => {
@@ -168,11 +164,9 @@ export function HistoryPanel() {
                   </Text>
                   <Text
                     color="$caption"
-                    fontFamily="Segoe UI Symbol, sans-serif"
-                    letterSpacing="2px"
                     overflow={expanded ? 'visible' : 'hidden'}
                     textOverflow={expanded ? 'clip' : 'ellipsis'}
-                    typography="sidebarBody"
+                    typography="brailleHistory"
                     whiteSpace={expanded ? 'normal' : 'nowrap'}
                     wordBreak="break-all"
                   >

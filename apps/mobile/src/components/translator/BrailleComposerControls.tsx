@@ -70,11 +70,10 @@ export function BrailleComposerControls() {
           bg="$containerBackground"
           border="1px solid $border"
           borderRadius="10px"
-          fontFamily="Segoe UI Symbol, sans-serif"
-          fontSize="32px"
           h="52px"
           lineHeight="52px"
           textAlign="center"
+          typography="brailleCell"
           w="64px"
         >
           {preview}

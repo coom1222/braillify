@@ -125,6 +125,46 @@
         "fontSize": "22px",
         "lineHeight": 1.6,
         "letterSpacing": "-0.01em"
+      },
+      "tabIcon": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "20px",
+        "lineHeight": 1
+      },
+      "sidebarIcon": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "26px",
+        "lineHeight": 1
+      },
+      "brandIcon": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "38px",
+        "lineHeight": 1
+      },
+      "brailleWatermark": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "lineHeight": 1
+      },
+      "braillePreview": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "32px",
+        "lineHeight": 1.4,
+        "letterSpacing": "4px"
+      },
+      "brailleCell": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "32px"
+      },
+      "brailleInput": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "24px",
+        "lineHeight": 1.6
+      },
+      "brailleHistory": {
+        "fontFamily": "Segoe UI Symbol, sans-serif",
+        "fontSize": "14px",
+        "lineHeight": 1.45,
+        "letterSpacing": "2px"
       }
     }
   }

@@ -37,10 +37,9 @@ export function TranslationOutput({
           alignSelf="center"
           aria-hidden="true"
           color="$emptyBraille"
-          fontFamily="Segoe UI Symbol, sans-serif"
           fontSize={['36px', null, '42px']}
           letterSpacing="0.3em"
-          lineHeight="1"
+          typography="brailleWatermark"
         >
           ⠃⠗⠁⠊⠇⠇⠊⠋⠽
         </Text>

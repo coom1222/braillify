@@ -44,13 +44,7 @@ export function BottomTabBar({ activeView, onNavigate }: BottomTabBarProps) {
             py="4px"
             type="button"
           >
-            <Text
-              aria-hidden="true"
-              color="currentColor"
-              fontFamily="Segoe UI Symbol, sans-serif"
-              fontSize="20px"
-              lineHeight="1"
-            >
+            <Text aria-hidden="true" color="currentColor" typography="tabIcon">
               {item.symbol}
             </Text>
             <Text color="currentColor" typography="sidebarCaption">

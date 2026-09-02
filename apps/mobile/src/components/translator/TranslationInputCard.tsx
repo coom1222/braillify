@@ -64,9 +64,6 @@ export function TranslationInputCard({
         bg="transparent"
         border="none"
         color="$text"
-        fontFamily={isReverse ? 'Segoe UI Symbol, sans-serif' : undefined}
-        fontSize={isReverse ? '24px' : undefined}
-        lineHeight={isReverse ? '1.6' : undefined}
         minH={isReverse ? '158px' : '224px'}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
@@ -78,6 +75,7 @@ export function TranslationInputCard({
         p="26px"
         placeholder={placeholder}
         resize="none"
+        typography={isReverse ? 'brailleInput' : undefined}
         value={input}
       />
 
