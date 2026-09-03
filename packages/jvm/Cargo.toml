@@ -11,6 +11,9 @@ repository = "https://github.com/dev-five-git/braillify"
 name = "braillify_jvm"
 crate-type = ["cdylib", "rlib"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin_include)"] }
+
 [dependencies]
 braillify = { path = "../../libs/braillify", default-features = false }
 jni = "=0.22.4"

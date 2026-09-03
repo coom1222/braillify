@@ -1,3 +1,7 @@
+// JNI entry points require a live JVM, so tarpaulin excludes this crate; the
+// separate `jvm-test` job verifies the real JNI path.
+#![cfg(not(tarpaulin_include))]
+
 //! JNI bridge for the desktop/server JVM binding.
 //!
 //! The bridge intentionally calls the Rust core directly. It owns no encoder
