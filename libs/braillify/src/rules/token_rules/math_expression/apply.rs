@@ -2214,6 +2214,17 @@ mod tests {
         assert!(!is_within_attached_korean_prose_parenthetical(&tokens, 1));
     }
 
+    #[test]
+    fn attached_prose_parenthetical_ignores_mode_tokens_in_its_body() {
+        let tokens = vec![
+            word_tok("한국("),
+            Token::Mode(crate::rules::token::ModeEvent::EnterEnglish),
+            word_tok("Web)"),
+        ];
+
+        assert!(is_within_attached_korean_prose_parenthetical(&tokens, 1));
+    }
+
     #[rstest::rstest]
     #[case::enclosed_roman_continuation("한글(ABC)-D", true)]
     #[case::korean_prefix_before_initialism("기장-KBO", true)]

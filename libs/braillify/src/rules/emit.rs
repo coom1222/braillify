@@ -1374,15 +1374,25 @@ mod tests {
     }
 
     #[test]
-    fn english_phrase_scan_stops_at_non_text_after_starting() {
+    fn english_phrase_scan_handles_non_text_boundaries() {
         let tokens = vec![
             word_token("Alpha"),
             Token::Space(SpaceKind::Regular),
             word_token("Beta"),
             Token::PreEncoded(vec![1]),
         ];
+        let leading_boundary = vec![
+            Token::PreEncoded(vec![1]),
+            word_token("Alpha"),
+            Token::Space(SpaceKind::Regular),
+            word_token("Beta"),
+        ];
 
         assert!(roman_section_has_english_phrase_context(&tokens, 0));
+        assert!(roman_section_has_english_phrase_context(
+            &leading_boundary,
+            0
+        ));
     }
 
     #[test]
@@ -1425,6 +1435,7 @@ mod tests {
 
     #[rstest::rstest]
     #[case::no_previous_word(None, false)]
+    #[case::empty_previous(Some(""), false)]
     #[case::punctuation_only_previous(Some("..."), false)]
     #[case::nested_enclosure(Some("((A))"), true)]
     #[case::missing_opener(Some("A)"), false)]
@@ -1568,6 +1579,36 @@ mod tests {
 
         assert!(output.contains(&crate::unicode::decode_unicode('⠲')));
         assert!(!ir.state.is_english);
+    }
+
+    #[test]
+    fn forced_symbol_between_adjacent_word_tokens_terminates_roman_mode() {
+        let tokens = vec![word_token("ABC"), word_token("/")];
+        let Token::Word(word) = &tokens[0] else {
+            unreachable!("fixture begins with a word")
+        };
+        let remaining_words = ["/"];
+        let mut state = EncoderState::new(true);
+        state.is_english = true;
+        let mut engine = make_char_engine();
+        let mut result = Vec::new();
+
+        emit_word(
+            word,
+            0,
+            &mut state,
+            &mut engine,
+            &tokens,
+            WordContext {
+                prev_word: "",
+                remaining_words: &remaining_words,
+            },
+            &mut result,
+        )
+        .expect("Roman word must encode");
+
+        assert_eq!(result.last(), Some(&50));
+        assert!(!state.is_english);
     }
 
     // ── Step 1-3: Basic token tests ──
