@@ -167,6 +167,9 @@ mod tests {
     #[case::curly_apostrophe("O\u{2019}PENing", 2, 8, true)]
     #[case::no_join("PENing", 0, 6, false)]
     #[case::unknown_elision("rock'n", 5, 6, false)]
+    #[case::empty_requested_run("abc", 1, 1, false)]
+    #[case::run_end_out_of_bounds("abc", 0, 4, false)]
+    #[case::requested_run_contains_nonletter("a1c", 0, 3, false)]
     fn classifies_apostrophe_elided_lexical_words(
         #[case] text: &str,
         #[case] run_start: usize,

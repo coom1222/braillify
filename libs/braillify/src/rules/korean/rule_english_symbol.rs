@@ -220,6 +220,11 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hyphen_suffix_lookup_rejects_an_out_of_bounds_index() {
+        assert!(!hyphen_suffix_requires_grade1(&['A'], 1));
+    }
+
     /// Korean rules 28/29/32: the Roman indicator establishes the first
     /// one-letter segment, and a multi-letter segment after the hyphen starts
     /// directly with its UEB letters.  In particular, no continuation/grade-1

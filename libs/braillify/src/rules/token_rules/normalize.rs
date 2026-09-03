@@ -235,4 +235,19 @@ mod tests {
     ) {
         assert_eq!(normalize(input), expected);
     }
+
+    #[test]
+    fn flattening_ignores_non_textual_tokens() {
+        let tokens = vec![
+            Token::Fraction(crate::rules::token::FractionToken {
+                whole: None,
+                numerator: "1".to_string(),
+                denominator: "2".to_string(),
+            }),
+            Token::Mode(crate::rules::token::ModeEvent::EnterEnglish),
+            Token::PreEncoded(vec![1]),
+        ];
+
+        assert!(flattened_chars(&tokens).is_empty());
+    }
 }

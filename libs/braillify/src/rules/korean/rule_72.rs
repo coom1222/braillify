@@ -296,6 +296,7 @@ mod tests {
     #[case::primed("△A′B′C′")]
     #[case::congruent("△ABC≡△DEF")]
     #[case::similar_primed("△ABC∽△A′B′C′")]
+    #[case::trailing_punctuation("△ABC.")]
     fn recognizes_math_triangle_grammar(#[case] input: &str) {
         let chars = input.chars().collect::<Vec<_>>();
         assert!(is_triangle_geometry_expression(&chars));
@@ -305,9 +306,27 @@ mod tests {
     #[case::acronym_with_gloss("△UAM(도심항공교통)")]
     #[case::brand_with_digits("△G3930P")]
     #[case::numeric_item("△2025")]
+    #[case::incomplete_second_triangle("△ABC=△AB")]
     fn attached_list_items_do_not_match_triangle_geometry(#[case] input: &str) {
         let chars = input.chars().collect::<Vec<_>>();
         assert!(!is_triangle_geometry_expression(&chars));
+    }
+
+    #[test]
+    fn attached_marker_rule_ignores_an_empty_word_token() {
+        let tokens = vec![Token::Word(WordToken {
+            text: Cow::Borrowed(""),
+            chars: Vec::new(),
+            meta: WordMeta::from_chars(&[]),
+        })];
+        let mut state = crate::rules::context::EncoderState::new(false);
+
+        assert!(matches!(
+            Rule72AttachedMarkerTokenRule
+                .apply(&tokens, 0, &mut state)
+                .expect("empty input is a no-op"),
+            TokenAction::Noop
+        ));
     }
 
     #[test]

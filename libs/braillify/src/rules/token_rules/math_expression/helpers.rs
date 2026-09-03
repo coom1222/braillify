@@ -825,6 +825,23 @@ mod tests {
     }
 
     #[test]
+    fn mixed_fraction_detects_korean_inside_the_parenthesized_operand() {
+        let text = "2/(삼+오)";
+        let chars = text.chars().collect::<Vec<_>>();
+
+        assert!(is_mixed_math_expression(&chars, text));
+    }
+
+    #[test]
+    fn anonymized_person_chain_rejects_invalid_or_unmarked_following_labels() {
+        let invalid = "A(1)·not".chars().collect::<Vec<_>>();
+        assert!(!anonymized_person_chain_has_marker(&invalid, 4));
+
+        let unmarked = "A(1)·B(2)·C(3)".chars().collect::<Vec<_>>();
+        assert!(!anonymized_person_chain_has_marker(&unmarked, 4));
+    }
+
+    #[test]
     fn try_encode_mixed_math_prefix_encodes_math_prefix_before_korean_suffix() {
         let prefix: Vec<char> = "x²".chars().collect();
         let suffix: Vec<char> = "는".chars().collect();

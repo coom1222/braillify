@@ -64,41 +64,39 @@ pub fn has_unambiguous_letter_name_pronunciation(chars: &[char]) -> bool {
         return false;
     }
 
-    fn letter_phones(letter: char) -> Option<&'static [&'static str]> {
-        Some(match letter {
-            'A' => &["EY"],
-            'B' => &["B", "IY"],
-            'C' => &["S", "IY"],
-            'D' => &["D", "IY"],
-            'E' => &["IY"],
-            'F' => &["EH", "F"],
-            'G' => &["JH", "IY"],
-            'H' => &["EY", "CH"],
-            'I' => &["AY"],
-            'J' => &["JH", "EY"],
-            'K' => &["K", "EY"],
-            'L' => &["EH", "L"],
-            'M' => &["EH", "M"],
-            'N' => &["EH", "N"],
-            'O' => &["OW"],
-            'P' => &["P", "IY"],
-            'Q' => &["K", "Y", "UW"],
-            'R' => &["AA", "R"],
-            'S' => &["EH", "S"],
-            'T' => &["T", "IY"],
-            'U' => &["Y", "UW"],
-            'V' => &["V", "IY"],
-            'W' => &["D", "AH", "B", "AH", "L", "Y", "UW"],
-            'X' => &["EH", "K", "S"],
-            'Y' => &["W", "AY"],
-            'Z' => &["Z", "IY"],
-            _ => return None,
-        })
-    }
+    const LETTER_PHONES: &[&[&str]; 26] = &[
+        &["EY"],
+        &["B", "IY"],
+        &["S", "IY"],
+        &["D", "IY"],
+        &["IY"],
+        &["EH", "F"],
+        &["JH", "IY"],
+        &["EY", "CH"],
+        &["AY"],
+        &["JH", "EY"],
+        &["K", "EY"],
+        &["EH", "L"],
+        &["EH", "M"],
+        &["EH", "N"],
+        &["OW"],
+        &["P", "IY"],
+        &["K", "Y", "UW"],
+        &["AA", "R"],
+        &["EH", "S"],
+        &["T", "IY"],
+        &["Y", "UW"],
+        &["V", "IY"],
+        &["D", "AH", "B", "AH", "L", "Y", "UW"],
+        &["EH", "K", "S"],
+        &["W", "AY"],
+        &["Z", "IY"],
+    ];
 
     let expected: Vec<&str> = chars
         .iter()
-        .flat_map(|letter| letter_phones(*letter).unwrap_or_default())
+        // The guard above proves every character is in `A..=Z`.
+        .flat_map(|letter| LETTER_PHONES[*letter as usize - 'A' as usize])
         .copied()
         .collect();
     let key: String = chars.iter().map(|ch| ch.to_ascii_lowercase()).collect();

@@ -982,6 +982,30 @@ mod test_support {
         assert_eq!(encoded, cells(expected));
     }
 
+    #[rstest::rstest]
+    #[case::mixed_capitalization(false, "⠁⠠⠃")]
+    #[case::caps_suppressed(true, "⠁⠃")]
+    fn numeric_grade1_mode_spells_mixed_case_letters(
+        #[case] suppress_caps: bool,
+        #[case] expected: &str,
+    ) {
+        let chars = "aB".chars().collect::<Vec<_>>();
+        let encoded = EnglishUebEngine::new()
+            .encode_korean_word(
+                &chars,
+                suppress_caps,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+            )
+            .expect("mixed-case numeric continuation must encode");
+
+        assert_eq!(encoded, cells(expected));
+    }
+
     pub(super) fn enc(text: &str) -> Option<Vec<u8>> {
         super::super::try_encode(text)
     }

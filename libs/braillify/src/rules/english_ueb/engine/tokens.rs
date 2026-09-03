@@ -153,20 +153,11 @@ pub(super) fn apostrophe_joined_recorded_token_word(tokens: &[EnglishToken], i: 
         return false;
     }
 
-    let mut joined = Vec::new();
-    let mut run_start = 0usize;
-    for (index, token) in tokens.iter().enumerate().take(end + 1).skip(start) {
-        match token {
-            EnglishToken::Word(chars) => {
-                if index == i {
-                    run_start = joined.len();
-                }
-                joined.extend(chars);
-            }
-            EnglishToken::Symbol(ch @ ('\'' | '\u{2019}')) => joined.push(*ch),
-            _ => return false,
-        }
-    }
+    // `start`/`end` are grown only across alternating Word/Apostrophe tokens.
+    // Reuse the exhaustive token flattener instead of repeating an unreachable
+    // defensive match for the already-proven slice shape.
+    let run_start = token_plain_chars(&tokens[start..i]).len();
+    let joined = token_plain_chars(&tokens[start..=end]);
     let run_end = run_start + current.len();
     super::super::pronunciation::apostrophe_elided_recorded_word_at(&joined, run_start, run_end)
 }
@@ -978,6 +969,14 @@ mod tests {
         // §16.5 column gap detection starts at a space; a non-space token → None.
         let tokens = [EnglishToken::Word("a".chars().collect())];
         assert_eq!(styled_column_gap(&tokens, 0), None);
+    }
+
+    #[test]
+    fn apostrophe_lexeme_lookup_requires_a_word_at_the_requested_index() {
+        assert!(!apostrophe_joined_recorded_token_word(
+            &[EnglishToken::Space],
+            0
+        ));
     }
 
     #[test]

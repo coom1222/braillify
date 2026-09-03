@@ -961,4 +961,28 @@ mod tests {
         );
         assert!(!out.is_empty());
     }
+
+    #[test]
+    fn standing_all_caps_longer_shortform_collision_gets_grade1() {
+        // UEB 5.7.2/10.9.8: LLC begins with the `little` shortform cells but is
+        // not itself a complete pure-letter shortform abbreviation.
+        let ctx = WordContext {
+            standing_alone: true,
+            upper_usable: true,
+            shortform_usable: true,
+            allow_longer_shortforms: true,
+            lower_usable: true,
+            suppress_caps: false,
+            word_initial: true,
+            restricted_prefix_boundary: true,
+            digit_adjacent: false,
+        };
+        let mut out = Vec::new();
+
+        EnglishUebEngine::new()
+            .encode_word(&['L', 'L', 'C'], ctx, &mut out)
+            .expect("ASCII acronym must encode");
+
+        assert!(out.starts_with(&[GRADE1, CAPITAL, CAPITAL]));
+    }
 }

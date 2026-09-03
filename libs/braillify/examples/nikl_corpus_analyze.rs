@@ -3961,12 +3961,14 @@ fn has_attached_korean_auxiliary_itda(input: &str) -> bool {
     false
 }
 
-fn enum_key<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .expect("enum serialization must succeed")
-        .as_str()
-        .expect("enum must serialize as a string")
-        .to_string()
+macro_rules! enum_key {
+    ($value:expr) => {{
+        serde_json::to_value($value)
+            .expect("enum serialization must succeed")
+            .as_str()
+            .expect("enum must serialize as a string")
+            .to_string()
+    }};
 }
 
 fn excerpt_pair(expected: &str, actual: &str) -> (String, String) {
@@ -4393,8 +4395,8 @@ fn analyze(
                     });
             }
         }
-        let primary_key = enum_key(&primary);
-        let reason_key = enum_key(&reason);
+        let primary_key = enum_key!(&primary);
+        let reason_key = enum_key!(&reason);
         *primary_classes.entry(primary_key.clone()).or_insert(0) += 1;
         *reasons.entry(reason_key.clone()).or_insert(0) += 1;
 
@@ -7757,9 +7759,9 @@ mod tests {
 
     #[test]
     fn serializes_report_enum_keys_as_snake_case_strings() {
-        assert_eq!(enum_key(&PrimaryClass::Exact), "exact");
+        assert_eq!(enum_key!(&PrimaryClass::Exact), "exact");
         assert_eq!(
-            enum_key(&Reason::UnsupportedCharacterReview),
+            enum_key!(&Reason::UnsupportedCharacterReview),
             "unsupported_character_review"
         );
     }

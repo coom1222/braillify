@@ -171,6 +171,14 @@ mod tests {
         let _ = Rule27.matches(&ctx);
     }
 
+    #[test]
+    fn geoseong_predicate_rejects_non_symbol_context() {
+        let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
+        let ctx = owned.ctx_at(0);
+
+        assert!(!is_middle_korean_geoseong(&ctx));
+    }
+
     /// 제27항 — `has_historical_context` returns true when current word contains
     /// a hanja character (CJK Unified). Exercises lines 33-35 (own-word branch).
     #[test]

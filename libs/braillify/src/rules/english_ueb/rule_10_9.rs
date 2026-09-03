@@ -47,9 +47,7 @@ pub fn is_pure_shortform_abbreviation(word: &str) -> bool {
     if letters.len() < 2 || !letters.iter().all(char::is_ascii_lowercase) {
         return false;
     }
-    let Some(literal_cells) = korean_letter_sequence_cells(&letters) else {
-        return false;
-    };
+    let literal_cells = korean_letter_sequence_cells(&letters);
 
     SHORTFORMS
         .values()
@@ -76,9 +74,7 @@ pub fn requires_grade1_at_word_start(letters: &str) -> bool {
     }
 
     for end in 2..=chars.len() {
-        let Some(prefix_cells) = korean_letter_sequence_cells(&chars[..end]) else {
-            continue;
-        };
+        let prefix_cells = korean_letter_sequence_cells(&chars[..end]);
         for (shortform, notation) in SHORTFORMS.entries() {
             if notation_cells(notation).as_deref() != Some(prefix_cells.as_slice()) {
                 continue;
@@ -111,7 +107,7 @@ pub fn requires_grade1_at_word_start(letters: &str) -> bool {
 /// this exact path: a default [`ContractionEngine`] contains no registered rules
 /// and would consequently miss cell-equivalent sequences such as `fst` (`f` +
 /// the `st` groupsign) and `shd` (the `sh` groupsign + `d`).
-fn korean_letter_sequence_cells(letters: &[char]) -> Option<Vec<u8>> {
+fn korean_letter_sequence_cells(letters: &[char]) -> Vec<u8> {
     super::span::encode_korean_word(
         letters, true,  // capitalization indicators are compared separately
         false, // do not recursively prepend grade 1
@@ -121,6 +117,7 @@ fn korean_letter_sequence_cells(letters: &[char]) -> Option<Vec<u8>> {
         false, // no numeric grade-1 mode in a pure letters-sequence
         false, // not split by an apostrophe
     )
+    .expect("a lowercase ASCII letters-sequence must be encodable")
 }
 
 /// Encode a word as the §10.10.2 cell-minimising contraction sequence.

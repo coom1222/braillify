@@ -2157,6 +2157,64 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::empty_segment("ISO//IEC")]
+    #[case::punctuation_only_segment("ISO/-./IEC")]
+    fn roman_slash_identifier_rejects_incomplete_segments(#[case] input: &str) {
+        assert!(!is_korean_prose_roman_slash_identifier(
+            &input.chars().collect::<Vec<_>>()
+        ));
+    }
+
+    #[test]
+    fn single_letter_slash_phrase_requires_letters_in_the_following_word() {
+        let tokens = vec![word_tok("H/W"), space_tok(), word_tok("((")];
+        let chars = "H/W".chars().collect::<Vec<_>>();
+
+        assert!(!is_korean_prose_single_letter_slash_phrase(
+            &tokens, 0, &chars
+        ));
+    }
+
+    #[test]
+    fn multiword_parenthetical_tail_stops_at_a_non_word_boundary() {
+        let tokens = vec![
+            Token::PreEncoded(vec![1]),
+            space_tok(),
+            word_tok("Alliance)"),
+        ];
+        let Token::Word(tail) = &tokens[2] else {
+            unreachable!("fixture ends in a word")
+        };
+
+        assert!(!is_multiword_closed_roman_parenthetical_tail(
+            &tokens, 2, tail
+        ));
+    }
+
+    #[test]
+    fn multiword_parenthetical_head_stops_at_a_non_word_boundary() {
+        let tokens = vec![
+            word_tok("HCA(Home"),
+            space_tok(),
+            Token::PreEncoded(vec![1]),
+        ];
+        let Token::Word(head) = &tokens[0] else {
+            unreachable!("fixture begins with a word")
+        };
+
+        assert!(!is_multiword_closed_roman_parenthetical_head(
+            &tokens, 0, head
+        ));
+    }
+
+    #[test]
+    fn attached_prose_parenthetical_rejects_a_preencoded_body() {
+        let tokens = vec![word_tok("한국("), Token::PreEncoded(vec![1]), word_tok(")")];
+
+        assert!(!is_within_attached_korean_prose_parenthetical(&tokens, 1));
+    }
+
+    #[rstest::rstest]
     #[case::compact_unit("50bp", true)]
     #[case::decimal_prefix("3.1p", true)]
     #[case::ordinal("1st", true)]

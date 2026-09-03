@@ -339,6 +339,24 @@ impl BrailleRule for RuleMath {
 mod tests {
     use super::*;
 
+    #[rstest::rstest]
+    #[case::parenthesis('(', ')')]
+    #[case::square_bracket('[', ']')]
+    #[case::curly_brace('{', '}')]
+    #[case::single_angle('〈', '〉')]
+    #[case::double_angle('《', '》')]
+    #[case::corner_bracket('「', '」')]
+    #[case::white_corner_bracket('『', '』')]
+    #[case::lenticular_bracket('【', '】')]
+    #[case::tortoise_shell_bracket('〔', '〕')]
+    #[case::white_lenticular_bracket('〖', '〗')]
+    #[case::white_tortoise_shell_bracket('〘', '〙')]
+    #[case::white_square_bracket('〚', '〛')]
+    fn delimiter_pairs_are_bidirectional(#[case] opening: char, #[case] closing: char) {
+        assert_eq!(matching_opening_delimiter(closing), Some(opening));
+        assert_eq!(matching_closing_delimiter(opening), Some(closing));
+    }
+
     #[test]
     fn apply_exercise() {
         let mut owned = crate::test_helpers::CtxOwned::for_text("A", false);
@@ -430,6 +448,7 @@ mod tests {
     #[case::pdf_phone_number("02-799-1000", 2, false)]
     #[case::identifier_suffix("A-3", 1, false)]
     #[case::calendar_date("2024-09-03", 4, false)]
+    #[case::non_hyphen_character("A", 0, false)]
     fn ascii_hyphen_minus_is_disambiguated_by_syntax(
         #[case] input: &str,
         #[case] index: usize,

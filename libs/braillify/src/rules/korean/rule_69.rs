@@ -870,9 +870,9 @@ mod tests {
         encode_numeric_ascii_unit, encode_percent_abbreviation, encode_rule_69_unit_letters,
         encode_unicode_cells, is_ascii_unit_chain_slash, is_si_prefixed_byte_unit,
         is_si_prefixed_electrical_hour_unit, is_si_prefixed_litre_unit,
-        omit_roman_terminator_before_boundary, parse_numeric_ascii_unit_expression,
-        parse_numeric_ascii_unit_prefix, retain_unambiguous_ascii_unit_spellings,
-        word_looks_like_unit_chain,
+        omit_roman_terminator_before_boundary, omit_trailing_roman_terminator,
+        parse_numeric_ascii_unit_expression, parse_numeric_ascii_unit_prefix,
+        retain_unambiguous_ascii_unit_spellings, word_looks_like_unit_chain,
     };
 
     #[rstest::rstest]
@@ -1181,6 +1181,7 @@ mod tests {
     #[case::litre("L", true)]
     #[case::word_ending_l("model", false)]
     #[case::invalid_prefix("xL", false)]
+    #[case::empty_spelling("", false)]
     fn recognizes_case_preserving_si_litre_symbols(#[case] spelling: &str, #[case] expected: bool) {
         assert_eq!(is_si_prefixed_litre_unit(spelling), expected);
     }
@@ -1220,6 +1221,7 @@ mod tests {
     #[case::milliampere_hour("mAh", true)]
     #[case::decaampere_hour("daAh", true)]
     #[case::missing_hour("GW", false)]
+    #[case::invalid_base_before_hour("mh", false)]
     #[case::unknown_prefix("xWh", false)]
     #[case::wrong_case("gWh", false)]
     fn recognizes_si_prefixed_electrical_hour_units(
@@ -1227,6 +1229,36 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(is_si_prefixed_electrical_hour_unit(spelling), expected);
+    }
+
+    #[test]
+    fn trailing_roman_terminator_is_removed_when_section_continues() {
+        let terminator = crate::unicode::decode_unicode('⠲');
+        let mut encoded = vec![1, terminator];
+
+        omit_trailing_roman_terminator(&mut encoded);
+
+        assert_eq!(encoded, vec![1]);
+    }
+
+    #[test]
+    fn continuing_ascii_unit_clears_a_prior_roman_number_chain() {
+        use crate::rules::traits::BrailleRule;
+
+        let mut owned = crate::test_helpers::CtxOwned::for_text("GB", true)
+            .with_prev_word("5")
+            .with_remaining_words(["SSD"]);
+        owned.state.roman_number_chain = true;
+        let mut ctx = owned.ctx_at(0);
+
+        let outcome = Rule69.apply(&mut ctx).expect("Rule 69 unit must encode");
+
+        assert!(matches!(
+            outcome,
+            crate::rules::traits::RuleResult::Consumed
+        ));
+        assert!(!ctx.state.roman_number_chain);
+        assert!(ctx.state.is_english);
     }
 
     /// Rule 69 and its science-braille unit table: a complete Roman-written

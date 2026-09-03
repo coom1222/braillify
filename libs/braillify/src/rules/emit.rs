@@ -103,12 +103,12 @@ fn roman_section_has_english_phrase_context(tokens: &[Token<'_>], start_index: u
             .position(|ch| crate::utils::is_korean_char(*ch))
             .map_or(word.chars.len(), |offset| scan_start + offset);
         let roman_slice = &word.chars[scan_start..section_end];
-        let Some(last_roman) = roman_slice.iter().rposition(|ch| ch.is_ascii_alphabetic()) else {
-            if section_end < word.chars.len() {
-                break;
-            }
-            continue;
-        };
+        // `scan_start` is selected from an ASCII alphabetic position above, so
+        // this slice necessarily contains at least that Roman letter.
+        let last_roman = roman_slice
+            .iter()
+            .rposition(|ch| ch.is_ascii_alphabetic())
+            .expect("Roman section starts at an ASCII alphabetic character");
 
         started = true;
         roman_word_count += 1;
@@ -746,10 +746,9 @@ fn separated_symbol_continues_roman_section(tokens: &[Token<'_>], token_index: u
                         continue;
                     }
                     if ch == closing {
-                        let Some(next_depth) = depth.checked_sub(1) else {
-                            return false;
-                        };
-                        depth = next_depth;
+                        // The first scanned character is the matching opener,
+                        // and the function returns as soon as that level closes.
+                        depth -= 1;
                         if depth == 0 {
                             return saw_roman_or_number && !saw_korean;
                         }
@@ -1318,6 +1317,15 @@ mod tests {
         engine
     }
 
+    fn word_token(text: &'static str) -> Token<'static> {
+        let chars = text.chars().collect::<Vec<_>>();
+        Token::Word(WordToken {
+            text: Cow::Borrowed(text),
+            chars: chars.clone(),
+            meta: super::super::token::WordMeta::from_chars(&chars),
+        })
+    }
+
     /// Helper: round-trip test via emit(parse(text)) == encode(text)
     fn assert_round_trip(text: &str) {
         let mut ir = DocumentIR::parse(text, english_indicator(text));
@@ -1343,6 +1351,9 @@ mod tests {
     #[case::lowercase_enclosed("제목(plain words in context)이다.", "plain", true)]
     #[case::rule_37_metalinguistic_list("be, his, was, were의 약자를 바르게 쓰시오.", "be,", false)]
     #[case::single_roman_annotation("논문(Cell)이 발표됐다.", "논문(Cell)이", false)]
+    #[case::numeric_word_before_phrase("123 Alpha Beta", "123", true)]
+    #[case::numeric_word_inside_phrase("Alpha 123 Beta", "Alpha", true)]
+    #[case::korean_word_ends_phrase("Alpha 한국 Beta", "Alpha", false)]
     fn recognizes_structural_english_phrase_context(
         #[case] input: &str,
         #[case] first_roman_word: &str,
@@ -1361,6 +1372,186 @@ mod tests {
             roman_section_has_english_phrase_context(&ir.tokens, start_index),
             expected
         );
+    }
+
+    #[test]
+    fn english_phrase_scan_stops_at_non_text_after_starting() {
+        let tokens = vec![word_token("Alpha"), Token::PreEncoded(vec![1])];
+
+        assert!(!roman_section_has_english_phrase_context(&tokens, 0));
+    }
+
+    #[test]
+    fn current_word_lookup_handles_hard_boundaries_and_end_of_stream() {
+        assert!(current_word_at_or_after(&[Token::PreEncoded(vec![1])], 0).is_none());
+        assert!(current_word_at_or_after(&[], 0).is_none());
+    }
+
+    #[rstest::rstest]
+    #[case::parenthesis('(', ')')]
+    #[case::square_bracket('[', ']')]
+    #[case::curly_brace('{', '}')]
+    #[case::single_quote('‘', '’')]
+    #[case::double_quote('“', '”')]
+    #[case::single_angle('〈', '〉')]
+    #[case::double_angle('《', '》')]
+    #[case::corner_bracket('「', '」')]
+    #[case::white_corner_bracket('『', '』')]
+    #[case::lenticular_bracket('【', '】')]
+    #[case::tortoise_shell_bracket('〔', '〕')]
+    #[case::white_lenticular_bracket('〖', '〗')]
+    #[case::white_tortoise_shell_bracket('〘', '〙')]
+    #[case::white_square_bracket('〚', '〛')]
+    fn enclosure_delimiter_pairs_are_bidirectional(#[case] opening: char, #[case] closing: char) {
+        assert_eq!(matching_group_open(closing), Some(opening));
+        assert_eq!(matching_group_close(opening), Some(closing));
+    }
+
+    #[rstest::rstest]
+    #[case::no_previous_word(None, false)]
+    #[case::punctuation_only_previous(Some("..."), false)]
+    #[case::nested_enclosure(Some("((A))"), true)]
+    #[case::missing_opener(Some("A)"), false)]
+    fn closed_enclosure_scans_only_a_complete_ascii_group(
+        #[case] previous: Option<&'static str>,
+        #[case] expected: bool,
+    ) {
+        let tokens = previous.map_or_else(
+            || vec![Token::Space(SpaceKind::Regular)],
+            |text| vec![word_token(text)],
+        );
+
+        assert_eq!(
+            closed_enclosure_before_contains_ascii(&tokens, tokens.len()),
+            expected
+        );
+    }
+
+    #[test]
+    fn new_section_probe_handles_a_mode_prefix_without_a_current_word() {
+        let tokens = vec![
+            word_token("(A)"),
+            Token::Space(SpaceKind::Regular),
+            Token::Mode(ModeEvent::CapsWord),
+        ];
+
+        assert!(!starts_new_roman_section_after_closed_enclosure(&tokens, 2));
+    }
+
+    #[test]
+    fn spaced_colon_rejects_non_words_and_non_textual_right_boundaries() {
+        assert!(!spaced_colon_connects_roman_items(
+            &[Token::Space(SpaceKind::Regular)],
+            0
+        ));
+        let tokens = vec![
+            word_token(":"),
+            Token::Space(SpaceKind::Regular),
+            Token::PreEncoded(vec![1]),
+        ];
+        assert!(!spaced_colon_connects_roman_items(&tokens, 0));
+    }
+
+    #[rstest::rstest]
+    #[case::non_word_at_index("non_word")]
+    #[case::non_textual_left_boundary("non_text_left")]
+    #[case::non_roman_left_word("korean_left")]
+    #[case::malformed_attached_suffix("long_ampersand")]
+    #[case::non_textual_right_boundary("non_text_right")]
+    fn spaced_ampersand_rejects_incomplete_roman_neighbors(#[case] scenario: &str) {
+        let (tokens, index) = match scenario {
+            "non_word" => (vec![Token::Space(SpaceKind::Regular)], 0),
+            "non_text_left" => (
+                vec![
+                    Token::PreEncoded(vec![1]),
+                    Token::Space(SpaceKind::Regular),
+                    word_token("&"),
+                ],
+                2,
+            ),
+            "korean_left" => (
+                vec![
+                    word_token("한국"),
+                    Token::Space(SpaceKind::Regular),
+                    word_token("&"),
+                ],
+                2,
+            ),
+            "long_ampersand" => (
+                vec![
+                    word_token("Alpha"),
+                    Token::Space(SpaceKind::Regular),
+                    word_token("&?"),
+                ],
+                2,
+            ),
+            "non_text_right" => (
+                vec![
+                    word_token("Alpha"),
+                    Token::Space(SpaceKind::Regular),
+                    word_token("&"),
+                    Token::Space(SpaceKind::Regular),
+                    Token::PreEncoded(vec![1]),
+                ],
+                2,
+            ),
+            _ => unreachable!("unknown fixture"),
+        };
+
+        assert!(!spaced_ampersand_connects_roman_words(&tokens, index));
+    }
+
+    #[rstest::rstest]
+    #[case::no_following_word("no_next", false)]
+    #[case::empty_following_word("empty", false)]
+    #[case::nested_complete_group("nested", true)]
+    #[case::non_textual_group_body("non_text", false)]
+    #[case::unclosed_group("unclosed", false)]
+    fn separated_symbol_requires_a_complete_roman_group(
+        #[case] scenario: &str,
+        #[case] expected: bool,
+    ) {
+        let tokens = match scenario {
+            "no_next" => vec![word_token("Alpha")],
+            "empty" => vec![
+                word_token("Alpha"),
+                Token::Space(SpaceKind::Regular),
+                word_token(""),
+            ],
+            "nested" => vec![
+                word_token("Alpha"),
+                Token::Space(SpaceKind::Regular),
+                word_token("((Beta))"),
+            ],
+            "non_text" => vec![
+                word_token("Alpha"),
+                Token::Space(SpaceKind::Regular),
+                word_token("("),
+                Token::PreEncoded(vec![1]),
+            ],
+            "unclosed" => vec![
+                word_token("Alpha"),
+                Token::Space(SpaceKind::Regular),
+                word_token("(Beta"),
+            ],
+            _ => unreachable!("unknown fixture"),
+        };
+
+        assert_eq!(
+            separated_symbol_continues_roman_section(&tokens, 0),
+            expected
+        );
+    }
+
+    #[test]
+    fn slash_forces_a_terminator_before_leaving_roman_mode() {
+        let mut ir = DocumentIR::parse("ABC/한글", true);
+        let mut engine = make_char_engine();
+
+        let output = emit(&mut ir, &mut engine).expect("mixed Roman/Korean word must encode");
+
+        assert!(output.contains(&crate::unicode::decode_unicode('⠲')));
+        assert!(!ir.state.is_english);
     }
 
     // ── Step 1-3: Basic token tests ──

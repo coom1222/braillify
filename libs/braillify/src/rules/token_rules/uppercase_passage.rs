@@ -452,6 +452,37 @@ mod tests {
         assert_eq!(found, expected);
     }
 
+    #[test]
+    fn capitalized_group_rejects_korean_inside_the_capital_extent() {
+        let Token::Word(word) = word("A한B") else {
+            unreachable!("helper always builds a word")
+        };
+
+        assert_eq!(capitalized_group(&word), None);
+    }
+
+    #[test]
+    fn shortform_collision_before_capitals_passage_gets_grade1() {
+        let rule = UppercasePassageRule;
+        let tokens = spaced_words(&["CD", "EF", "GH"]);
+        let mut state = EncoderState::new(false);
+        state.english_indicator = true;
+
+        let TokenAction::ReplaceMany(replacement) =
+            rule.apply(&tokens, 0, &mut state).expect("passage starts")
+        else {
+            panic!("expected a passage-start replacement")
+        };
+
+        assert!(replacement.windows(2).any(|window| matches!(
+            window,
+            [
+                Token::Mode(ModeEvent::Grade1Indicator),
+                Token::Mode(ModeEvent::CapsPassageStart)
+            ]
+        )));
+    }
+
     #[rstest::rstest]
     #[case::pdf_gigabyte("GB")]
     #[case::petabyte("PB")]

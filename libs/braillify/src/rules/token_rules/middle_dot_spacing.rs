@@ -140,6 +140,8 @@ impl TokenRule for MiddleDotSpacingRule {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// Korean rules 50, 51, and 59 determine braille spacing even when the
     /// print source contains editorial spaces around the punctuation.
     #[rstest::rstest]
@@ -162,5 +164,19 @@ mod tests {
             crate::encode("설명(FAPAS : Food)"),
             crate::encode("설명(FAPAS: Food)")
         );
+    }
+
+    #[test]
+    fn colon_spacing_probe_returns_false_when_no_punctuation_word_follows() {
+        let mut ir = crate::rules::token::DocumentIR::parse("한국", false);
+        ir.tokens
+            .push(Token::Space(crate::rules::token::SpaceKind::Regular));
+        let Token::Word(previous) = &ir.tokens[0] else {
+            unreachable!("fixture begins with a word")
+        };
+
+        assert!(!space_precedes_korean_colon_or_semicolon(
+            &ir.tokens, 1, previous
+        ));
     }
 }
