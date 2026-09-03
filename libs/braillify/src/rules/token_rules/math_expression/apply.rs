@@ -657,15 +657,15 @@ pub(super) fn has_korean_prefix_terminal_roman_plus_identifier(chars: &[char]) -
 /// A single lowercase letter remains ambiguous algebra (`값-x`), and an
 /// explicit operator after the Roman start remains math-owned (`값-x+1`).
 pub(super) fn has_korean_prefix_roman_hyphen_suffix(chars: &[char]) -> bool {
-    let enclosed_roman_continuation = chars.iter().enumerate().any(|(index, ch)| {
-        ch.is_ascii_alphabetic()
+    for (index, ch) in chars.iter().enumerate() {
+        if ch.is_ascii_alphabetic()
             && chars[..index]
                 .iter()
                 .any(|prefix| crate::utils::is_korean_char(*prefix))
             && is_korean_prose_roman_hyphen_identifier(&chars[index..])
-    });
-    if enclosed_roman_continuation {
-        return true;
+        {
+            return true;
+        }
     }
 
     chars.windows(3).enumerate().any(|(index, window)| {
@@ -2212,6 +2212,20 @@ mod tests {
         let tokens = vec![word_tok("한국("), Token::PreEncoded(vec![1]), word_tok(")")];
 
         assert!(!is_within_attached_korean_prose_parenthetical(&tokens, 1));
+    }
+
+    #[rstest::rstest]
+    #[case::enclosed_roman_continuation("한글(ABC)-D", true)]
+    #[case::korean_prefix_before_initialism("기장-KBO", true)]
+    #[case::lowercase_math_variable("값-x", false)]
+    fn korean_roman_hyphen_suffix_is_classified_structurally(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            has_korean_prefix_roman_hyphen_suffix(&input.chars().collect::<Vec<_>>()),
+            expected
+        );
     }
 
     #[rstest::rstest]

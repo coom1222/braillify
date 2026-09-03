@@ -858,7 +858,7 @@ fn apply_inter_character_rules(
     remaining_words: &[&str],
     prev_word: &str,
     result: &mut Vec<u8>,
-) -> Result<(), String> {
+) -> Result<crate::rules::traits::RuleResult, String> {
     let mut ctx = RuleContext {
         word_chars,
         index,
@@ -873,8 +873,7 @@ fn apply_inter_character_rules(
         state,
         result,
     };
-    engine.apply_phase(Phase::InterCharacter, &mut ctx)?;
-    Ok(())
+    engine.apply_phase(Phase::InterCharacter, &mut ctx)
 }
 
 fn emit_word(
@@ -1376,9 +1375,26 @@ mod tests {
 
     #[test]
     fn english_phrase_scan_stops_at_non_text_after_starting() {
-        let tokens = vec![word_token("Alpha"), Token::PreEncoded(vec![1])];
+        let tokens = vec![
+            word_token("Alpha"),
+            Token::Space(SpaceKind::Regular),
+            word_token("Beta"),
+            Token::PreEncoded(vec![1]),
+        ];
 
-        assert!(!roman_section_has_english_phrase_context(&tokens, 0));
+        assert!(roman_section_has_english_phrase_context(&tokens, 0));
+    }
+
+    #[test]
+    fn previous_word_separation_scan_crosses_mode_markers() {
+        let tokens = vec![
+            word_token("Alpha"),
+            Token::Space(SpaceKind::Regular),
+            Token::Mode(ModeEvent::CapsWord),
+        ];
+
+        assert!(is_separated_from_previous_word(&tokens, tokens.len()));
+        assert!(!is_separated_from_previous_word(&tokens, 1));
     }
 
     #[test]
