@@ -45,6 +45,76 @@ pub fn is_recorded_word(word: &str) -> bool {
     INDEX.contains_key(word)
 }
 
+/// Whether CMUdict supplies sufficiently specific evidence that an uppercase
+/// abbreviation is pronounced as letter names.
+///
+/// UEB §10.12.1 suppresses contractions when an abbreviation is pronounced as
+/// letters.  Case-folded dictionary headwords alone cannot establish that
+/// (`LED` otherwise collides with lexical *led*), so compare a pronunciation
+/// variant against the concatenated ARPABET names of the printed capitals. An
+/// For three or more letters, every recorded pronunciation must be the exact
+/// letter-name sequence; this keeps word-pronounced acronyms such as `ASEAN`
+/// on UEB's contract-when-uncertain fallback when the dictionary records both
+/// readings.  For a two-capital abbreviation, an exact two-letter reading is
+/// already specific evidence for the printed abbreviation even when the same
+/// case-folded headword also has a one-word homograph (`AI` versus *ai*).
+/// Unknown abbreviations and longer mixed-pronunciation entries return false.
+pub fn has_unambiguous_letter_name_pronunciation(chars: &[char]) -> bool {
+    if chars.len() < 2 || !chars.iter().all(|ch| ch.is_ascii_uppercase()) {
+        return false;
+    }
+
+    fn letter_phones(letter: char) -> Option<&'static [&'static str]> {
+        Some(match letter {
+            'A' => &["EY"],
+            'B' => &["B", "IY"],
+            'C' => &["S", "IY"],
+            'D' => &["D", "IY"],
+            'E' => &["IY"],
+            'F' => &["EH", "F"],
+            'G' => &["JH", "IY"],
+            'H' => &["EY", "CH"],
+            'I' => &["AY"],
+            'J' => &["JH", "EY"],
+            'K' => &["K", "EY"],
+            'L' => &["EH", "L"],
+            'M' => &["EH", "M"],
+            'N' => &["EH", "N"],
+            'O' => &["OW"],
+            'P' => &["P", "IY"],
+            'Q' => &["K", "Y", "UW"],
+            'R' => &["AA", "R"],
+            'S' => &["EH", "S"],
+            'T' => &["T", "IY"],
+            'U' => &["Y", "UW"],
+            'V' => &["V", "IY"],
+            'W' => &["D", "AH", "B", "AH", "L", "Y", "UW"],
+            'X' => &["EH", "K", "S"],
+            'Y' => &["W", "AY"],
+            'Z' => &["Z", "IY"],
+            _ => return None,
+        })
+    }
+
+    let expected: Vec<&str> = chars
+        .iter()
+        .flat_map(|letter| letter_phones(*letter).unwrap_or_default())
+        .copied()
+        .collect();
+    let key: String = chars.iter().map(|ch| ch.to_ascii_lowercase()).collect();
+    INDEX.get(key.as_str()).is_some_and(|variants| {
+        let is_letter_name_variant = |variant: &&str| {
+            variant
+                .split_whitespace()
+                .map(|phone| phone.trim_end_matches(['0', '1', '2']))
+                .eq(expected.iter().copied())
+        };
+        !variants.is_empty()
+            && (variants.iter().all(is_letter_name_variant)
+                || (chars.len() == 2 && variants.iter().any(is_letter_name_variant)))
+    })
+}
+
 /// Looks up ARPABET pronunciations from the embedded CMUdict.
 pub struct CmuDictProvider;
 
@@ -135,5 +205,19 @@ mod tests {
         assert_eq!(parse_cmudict_line("# comment only"), None);
         // A head with no phones → None.
         assert_eq!(parse_cmudict_line("word "), None);
+    }
+
+    #[rstest::rstest]
+    #[case::ged_is_ambiguous("GED", false)]
+    #[case::ai_two_letter_abbreviation("AI", true)]
+    #[case::cc_two_letter_abbreviation("CC", true)]
+    #[case::asean_mixed_pronunciation("ASEAN", false)]
+    #[case::ofc_initialism("OFC", true)]
+    #[case::lexical_led_only("LED", false)]
+    #[case::unknown_mou("MOU", false)]
+    #[case::lowercase_is_not_capitals("ged", false)]
+    fn detects_unambiguous_letter_name_pronunciations(#[case] text: &str, #[case] expected: bool) {
+        let chars: Vec<char> = text.chars().collect();
+        assert_eq!(has_unambiguous_letter_name_pronunciation(&chars), expected);
     }
 }

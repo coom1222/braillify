@@ -100,11 +100,23 @@ pub(super) fn is_math_expression(chars: &[char], text: &str) -> bool {
         return false;
     }
 
+    // Korean rules 33 and 35: a letter-led Roman/number identifier remains
+    // Roman text when ordinary prose punctuation follows it. The punctuation
+    // alone must not turn `MP3`-shaped text into a mathematical expression.
+    if let Some((trailing, core)) = chars.split_last()
+        && matches!(*trailing, ',' | ';' | ':' | '.')
+        && core.first().is_some_and(|ch| ch.is_ascii_alphabetic())
+        && core.iter().any(|ch| ch.is_ascii_digit())
+        && core.iter().all(|ch| ch.is_ascii_alphanumeric())
+    {
+        return false;
+    }
+
     // PDF 제33·34·69항: 숫자+로마자 단위와 바로 뒤의 종료표 생략 문장부호는
     // 수식이 아니라 하나의 국어 문장 내 단위 표기다. 일반 operator/symbol 판정보다
     // 먼저 배제해야 `173cm,` 같은 토큰이 comma 때문에 수식 경로로 우회하지 않는다.
-    if let Some((_, _, consumed)) =
-        crate::rules::korean::rule_69::parse_numeric_ascii_unit_prefix(chars)
+    if let Some(consumed) =
+        crate::rules::korean::rule_69::parse_numeric_ascii_unit_expression(chars)
         && (consumed == chars.len()
             || (consumed + 1 == chars.len()
                 && chars.get(consumed).is_some_and(|symbol| {
@@ -329,5 +341,17 @@ mod tests {
     fn compact_rule69_unit_with_boundary_is_not_math(#[case] input: &str, #[case] expected: bool) {
         let chars = input.chars().collect::<Vec<_>>();
         assert_eq!(super::is_math_expression(&chars, input), expected);
+    }
+
+    /// Rules 33/35: trailing prose punctuation preserves the same non-math
+    /// classification as the underlying letter-led Roman/number identifier.
+    #[rstest::rstest]
+    #[case::comma("MP3,")]
+    #[case::mixed_case_comma("RX350h,")]
+    #[case::colon("A4:")]
+    #[case::period("KF94.")]
+    fn roman_number_identifier_with_prose_punctuation_is_not_math(#[case] input: &str) {
+        let chars = input.chars().collect::<Vec<_>>();
+        assert!(!super::is_math_expression(&chars, input));
     }
 }

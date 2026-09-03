@@ -40,7 +40,10 @@ fn encode_unicode_cells(unicode: &str) -> Vec<u8> {
 }
 
 fn should_insert_separator_after_symbol(ctx: &RuleContext) -> bool {
-    matches!(ctx.current_char(), '㎡') && matches!(ctx.next_char(), Some('는' | '은'))
+    matches!(ctx.current_char(), '㎡')
+        && ctx
+            .next_char()
+            .is_some_and(super::rule_44::is_number_confusable_korean_char)
 }
 
 pub fn is_rule_68_symbol(c: char) -> bool {
@@ -224,12 +227,20 @@ impl BrailleRule for Rule68 {
             return Ok(RuleResult::Consumed);
         }
 
-        let Some(encoded) = encode_rule_68_symbol(ctx.current_char()) else {
+        let Some(mut encoded) = encode_rule_68_symbol(ctx.current_char()) else {
             return Ok(RuleResult::Skip);
         };
+        let is_roman_unit = matches!(ctx.current_char(), '㎡' | '㏊');
+        let continues = is_roman_unit
+            && super::rule_69::adjust_roman_unit_boundary(ctx, ctx.index + 1, &mut encoded);
         ctx.emit_slice(&encoded);
         if should_insert_separator_after_symbol(ctx) {
             ctx.emit(0);
+        }
+        if is_roman_unit {
+            ctx.state.is_english = continues;
+            ctx.state.needs_english_continuation = false;
+            ctx.state.roman_number_chain = false;
         }
         Ok(RuleResult::Consumed)
     }
@@ -261,6 +272,21 @@ fn is_digit_grade_plus_notation(word: &[char], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rstest::rstest]
+    #[case::official_particle("10,000㎡는", true)]
+    #[case::confusable_counter("3.3㎡당", true)]
+    #[case::vowel_initial_predicate("3.3㎡이다", false)]
+    fn square_metre_separates_only_number_confusable_korean(
+        #[case] input: &str,
+        #[case] expects_separator: bool,
+    ) {
+        let actual = crate::encode_to_unicode(input).unwrap();
+        let unit = "⠴⠍⠘⠼⠃";
+        let unit_end = actual.find(unit).expect("square-metre cells") + unit.len();
+        let follows_with_space = actual[unit_end..].starts_with('⠀');
+        assert_eq!(follows_with_space, expects_separator, "input={input}");
+    }
 
     #[test]
     fn is_rule_68_symbol_recognises_each_entry() {
@@ -430,6 +456,7 @@ mod tests {
             has_korean_char: false,
             is_all_uppercase: false,
             ascii_starts_at_beginning: false,
+            roman_section_continues_from_previous_word: false,
             skip_count: &mut skip,
             state: &mut state,
             result: &mut out,
@@ -457,6 +484,7 @@ mod tests {
             has_korean_char: true,
             is_all_uppercase: false,
             ascii_starts_at_beginning: false,
+            roman_section_continues_from_previous_word: false,
             skip_count: &mut skip,
             state: &mut state,
             result: &mut out,
@@ -487,6 +515,7 @@ mod tests {
             has_korean_char: false,
             is_all_uppercase: true,
             ascii_starts_at_beginning: true,
+            roman_section_continues_from_previous_word: false,
             skip_count: &mut skip,
             state: &mut state,
             result: &mut out,
@@ -514,6 +543,7 @@ mod tests {
             has_korean_char: false,
             is_all_uppercase: false,
             ascii_starts_at_beginning: false,
+            roman_section_continues_from_previous_word: false,
             skip_count: &mut skip,
             state: &mut state,
             result: &mut out,
@@ -572,6 +602,7 @@ mod tests {
             has_korean_char: false,
             is_all_uppercase: true,
             ascii_starts_at_beginning: true,
+            roman_section_continues_from_previous_word: false,
             skip_count: &mut skip,
             state: &mut state,
             result: &mut out,

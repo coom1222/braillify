@@ -36,6 +36,10 @@ pub(crate) struct KoreanSpanUnit {
 /// Encode a complete ASCII Roman run in Korean context with the shared UEB
 /// contraction engine. Korean rule 37 disables wordsigns and shortforms while
 /// retaining multi-letter groupsigns; the engine entry point enforces that gate.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the wrapper preserves the engine's independent UEB rule gates"
+)]
 pub(crate) fn encode_korean_word(
     chars: &[char],
     suppress_caps: bool,
@@ -43,6 +47,8 @@ pub(crate) fn encode_korean_word(
     standing_alone: bool,
     word_initial: bool,
     digit_adjacent: bool,
+    numeric_grade1_active: bool,
+    apostrophe_joined_lexeme: bool,
 ) -> Option<Vec<u8>> {
     KOREAN_WORD_ENGINE.encode_korean_word(
         chars,
@@ -51,6 +57,8 @@ pub(crate) fn encode_korean_word(
         standing_alone,
         word_initial,
         digit_adjacent,
+        numeric_grade1_active,
+        apostrophe_joined_lexeme,
     )
 }
 

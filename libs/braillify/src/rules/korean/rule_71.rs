@@ -16,6 +16,7 @@ const MAPPINGS: &[(char, &str)] = &[
     ('^', "⠈⠢"),
     ('#', "⠸⠹"),
     ('|', "⠸⠳"),
+    ('│', "⠸⠳"),
     ('\\', "⠸⠡"),
     ('&', "⠈⠯"),
     ('§', "⠘⠎"),
@@ -143,7 +144,19 @@ impl BrailleRule for Rule71 {
         } else {
             encoded = encode_unicode_cells(unicode);
         }
+
+        // U+2502 is the Unicode box-drawing presentation of a vertical line
+        // segment. Korean Rule 71 assigns the same cells as `|`, while UEB
+        // 16.4.3 requires a vertical line segment to be surrounded by spaces.
+        // Insert only missing intra-token boundaries; ordinary Token::Space
+        // already owns whitespace printed around a standalone line.
+        if ctx.current_char() == '│' && ctx.prev_char().is_some() {
+            ctx.emit(0);
+        }
         ctx.emit_slice(&encoded);
+        if ctx.current_char() == '│' && ctx.next_char().is_some() {
+            ctx.emit(0);
+        }
         Ok(RuleResult::Consumed)
     }
 }
@@ -242,6 +255,17 @@ mod tests {
         assert_eq!(crate::encode_to_unicode(input).unwrap(), expected);
     }
 
+    /// UEB 3.1.1 keeps `AT&T` in one Roman section and Korean rule 35 keeps
+    /// the directly following digit in that same section. The two rules must
+    /// compose without a terminator/re-entry around the ampersand or digit.
+    #[test]
+    fn full_encoder_keeps_ampersand_roman_number_chain() {
+        assert_eq!(
+            crate::encode_to_unicode("가 AT&T3 나").unwrap(),
+            "⠫⠀⠴⠠⠠⠁⠞⠈⠯⠠⠞⠼⠉⠀⠉"
+        );
+    }
+
     /// UEB 8.4.2 ends capitals word mode at the nonalphabetic ampersand.
     /// Wrapping the official UEB 3.1.1 examples in neutral Korean text proves
     /// that the mixed-document rule-28/29 path restarts capitalization for the
@@ -254,6 +278,20 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(crate::encode_to_unicode(input).as_deref(), Ok(expected));
+    }
+
+    #[rstest::rstest]
+    #[case::standalone("│", "|")]
+    #[case::spaced("저자 │ 홍길동", "저자 | 홍길동")]
+    #[case::attached("제작│감독", "제작 | 감독")]
+    fn box_drawing_vertical_line_matches_rule_71_print_form(
+        #[case] presentation: &str,
+        #[case] standard_print: &str,
+    ) {
+        assert_eq!(
+            crate::encode_to_unicode(presentation),
+            crate::encode_to_unicode(standard_print)
+        );
     }
 
     /// Korean Rule 71's spaced Hangul example remains an independently

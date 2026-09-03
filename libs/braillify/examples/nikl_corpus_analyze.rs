@@ -57,6 +57,9 @@ enum Reason {
     Exact,
     ConflictingDuplicateReference,
     Rule34RomanIndicatorBeforeOpeningParenthesis,
+    RomanEllipsisUsesKoreanCellsInRomanEnclosure,
+    UebGrade1BeforeNonstandingOpeningParenthesis,
+    UebCapitalizedPassageWrittenAsSeparateCapitalWords,
     BrailleWhitespaceEquivalent,
     NfcInputEquivalent,
     NfkcInputEquivalent,
@@ -455,6 +458,23 @@ fn classify(encoded: &EncodedCase, conflicting: &BTreeSet<String>) -> (PrimaryCl
             PrimaryClass::CorpusSuspect,
             Reason::Rule34RomanIndicatorBeforeOpeningParenthesis,
         ),
+        _ if is_roman_ellipsis_reference_contradiction(encoded) => (
+            PrimaryClass::CorpusSuspect,
+            Reason::RomanEllipsisUsesKoreanCellsInRomanEnclosure,
+        ),
+        _ if is_ueb_grade1_before_nonstanding_opening_parenthesis_reference_contradiction(
+            encoded,
+        ) =>
+        {
+            (
+                PrimaryClass::CorpusSuspect,
+                Reason::UebGrade1BeforeNonstandingOpeningParenthesis,
+            )
+        }
+        _ if is_ueb_capitalized_passage_reference_contradiction(encoded) => (
+            PrimaryClass::CorpusSuspect,
+            Reason::UebCapitalizedPassageWrittenAsSeparateCapitalWords,
+        ),
         Ok(actual) if roman_before_capital_order(actual) == *expected => (
             PrimaryClass::ImplementationDefect,
             Reason::RomanIndicatorAfterCapitalIndicator,
@@ -625,6 +645,7 @@ const ROMAN_UPPERCASE_AFTER_HYPHEN: &str =
     "uppercase_ascii_run_immediately_after_hyphen_in_roman_sequence";
 const PURE_ALLCAPS_HYPHEN_MULTI_ALLCAPS: &str =
     "pure_allcaps_segment_before_hyphen_and_multi_allcaps_segment_after";
+const KOREAN_TO_ROMAN_HYPHEN_BOUNDARY: &str = "attached_korean_to_roman_hyphen_boundary";
 const ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD: &str =
     "roman_hyphenated_word_after_whitespace_following_korean_word";
 const ROMAN_PARENTHETICAL_HEADWORD_AFTER_KOREAN_WORD: &str =
@@ -927,6 +948,274 @@ fn is_rule_34_reference_order_contradiction(item: &EncodedCase) -> bool {
         && korean_prefixed_annotation_opening_ranges(&item.located.case.input, actual)
             .into_iter()
             .any(|range| range.start == difference)
+}
+
+/// UEB 2024 section 7.3 assigns U+2026 the same three full-stop cells as the
+/// print spelling `...`. When the ellipsis is attached to Roman letters and
+/// immediately closes their enclosure, a reference using Korean rule-53
+/// middle-dot cells is an independently reproducible standard conflict.
+fn is_roman_ellipsis_reference_contradiction(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    let expected = &item.located.case.unicode;
+    if actual == expected {
+        return false;
+    }
+
+    let has_roman_enclosed_ellipsis = item
+        .located
+        .case
+        .input
+        .chars()
+        .collect::<Vec<_>>()
+        .windows(3)
+        .any(|window| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == '…'
+                && matches!(window[2], ')' | ']' | '}' | '”' | '’' | '」' | '』')
+        });
+    if !has_roman_enclosed_ellipsis {
+        return false;
+    }
+
+    let difference = first_difference_cell(expected, actual);
+    let expected_cells = expected.chars().collect::<Vec<_>>();
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    expected_cells.get(difference..difference + 3) == Some(&['⠠', '⠠', '⠠'])
+        && actual_cells.get(difference..difference + 3) == Some(&['⠲', '⠲', '⠲'])
+}
+
+#[derive(Clone, Copy)]
+struct AnalyzerCapitalizedGroup {
+    start: usize,
+    end: usize,
+    capital_count: usize,
+}
+
+fn is_capitals_opening_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '\'' | '"' | '\u{2018}' | '\u{201c}' | '(' | '[' | '{' | '〈' | '《' | '「' | '『'
+    )
+}
+
+fn is_capitals_closing_quote(ch: char) -> bool {
+    matches!(
+        ch,
+        '\'' | '"' | '\u{2019}' | '\u{201d}' | '〉' | '》' | '」' | '』'
+    )
+}
+
+fn analyzer_capitalized_group(word: &str) -> Option<AnalyzerCapitalizedGroup> {
+    let chars = word.chars().collect::<Vec<_>>();
+    if chars.iter().any(char::is_ascii_lowercase) {
+        return None;
+    }
+
+    let start = chars.iter().position(char::is_ascii_uppercase)?;
+    if !chars[..start]
+        .iter()
+        .copied()
+        .all(is_capitals_opening_punctuation)
+    {
+        return None;
+    }
+    let last_capital = chars.iter().rposition(char::is_ascii_uppercase)?;
+    if chars[start..=last_capital]
+        .iter()
+        .any(|ch| is_korean_script(*ch))
+    {
+        return None;
+    }
+
+    let mut end = chars.len();
+    for index in last_capital + 1..chars.len() {
+        let ch = chars[index];
+        let opens_attached_korean_gloss = matches!(ch, '(' | '[' | '{')
+            && chars[index + 1..]
+                .iter()
+                .any(|next| is_korean_script(*next));
+        if is_korean_script(ch) || is_capitals_closing_quote(ch) || opens_attached_korean_gloss {
+            end = index;
+            break;
+        }
+    }
+
+    Some(AnalyzerCapitalizedGroup {
+        start,
+        end,
+        capital_count: chars.iter().filter(|ch| ch.is_ascii_uppercase()).count(),
+    })
+}
+
+/// Return the number of per-sequence capitalization cells used by the
+/// non-passage spelling for each UEB 8.5.2 passage candidate in `input`.
+/// A single capital uses one cell; a multi-letter capitals word uses two.
+fn separate_capital_indicator_counts_for_passages(input: &str) -> Vec<usize> {
+    let words = input.split_whitespace().collect::<Vec<_>>();
+    let groups = words
+        .iter()
+        .map(|word| analyzer_capitalized_group(word))
+        .collect::<Vec<_>>();
+    let word_lengths = words
+        .iter()
+        .map(|word| word.chars().count())
+        .collect::<Vec<_>>();
+    let mut counts = Vec::new();
+    let mut index = 0usize;
+
+    while index + 2 < words.len() {
+        let Some(current) = groups[index] else {
+            index += 1;
+            continue;
+        };
+        let Some(first) = groups[index + 1] else {
+            index += 1;
+            continue;
+        };
+        let Some(second) = groups[index + 2] else {
+            index += 1;
+            continue;
+        };
+        if current.end != word_lengths[index]
+            || first.start != 0
+            || first.end != word_lengths[index + 1]
+            || second.start != 0
+        {
+            index += 1;
+            continue;
+        }
+
+        let mut end = index + 3;
+        while end < words.len() && groups[end].is_some_and(|group| group.start == 0) {
+            end += 1;
+        }
+        let separate_cells = groups[index..end]
+            .iter()
+            .flatten()
+            .map(|group| if group.capital_count == 1 { 1 } else { 2 })
+            .sum();
+        counts.push(separate_cells);
+        index = end;
+    }
+
+    counts
+}
+
+fn matches_after_removing_capital_cells(
+    expected: &[char],
+    actual: &[char],
+    expected_index: usize,
+    actual_index: usize,
+    removed: usize,
+    required_removed: usize,
+    failed: &mut BTreeSet<(usize, usize, usize)>,
+) -> bool {
+    let state = (expected_index, actual_index, removed);
+    if failed.contains(&state) {
+        return false;
+    }
+    if expected_index == expected.len() && actual_index == actual.len() {
+        return removed == required_removed;
+    }
+
+    if expected.get(expected_index) == actual.get(actual_index)
+        && matches_after_removing_capital_cells(
+            expected,
+            actual,
+            expected_index + 1,
+            actual_index + 1,
+            removed,
+            required_removed,
+            failed,
+        )
+    {
+        return true;
+    }
+    if removed < required_removed
+        && expected.get(expected_index) == Some(&'⠠')
+        && matches_after_removing_capital_cells(
+            expected,
+            actual,
+            expected_index + 1,
+            actual_index,
+            removed + 1,
+            required_removed,
+            failed,
+        )
+    {
+        return true;
+    }
+
+    failed.insert(state);
+    false
+}
+
+/// UEB 2024 8.5.2 requires one capitals-passage indicator for three or more
+/// capitalized symbols-sequences, and 8.5.3 places its terminator immediately
+/// after the final affected sequence. A reference is classified only when the
+/// complete sentence becomes identical by replacing that exact five-cell
+/// passage pair with the structurally required one-/two-cell indicators for
+/// each sequence. Unrelated differences therefore remain pending review.
+fn is_ueb_capitalized_passage_reference_contradiction(item: &EncodedCase) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    let expected = &item.located.case.unicode;
+    if actual == expected {
+        return false;
+    }
+
+    let indicator_counts = separate_capital_indicator_counts_for_passages(&item.located.case.input);
+    if indicator_counts.is_empty() {
+        return false;
+    }
+    let actual = actual.chars().collect::<Vec<_>>();
+    let expected = expected.chars().collect::<Vec<_>>();
+
+    for start in 0..actual.len().saturating_sub(2) {
+        if actual.get(start..start + 3) != Some(&['⠠', '⠠', '⠠'])
+            || expected.get(..start) != actual.get(..start)
+        {
+            continue;
+        }
+        for terminator in start + 3..actual.len().saturating_sub(1) {
+            if actual.get(terminator..terminator + 2) != Some(&['⠠', '⠄']) {
+                continue;
+            }
+            let actual_suffix_start = terminator + 2;
+            let suffix_len = actual.len() - actual_suffix_start;
+            let Some(expected_segment_end) = expected.len().checked_sub(suffix_len) else {
+                continue;
+            };
+            if expected_segment_end < start
+                || expected.get(expected_segment_end..) != actual.get(actual_suffix_start..)
+            {
+                continue;
+            }
+
+            let actual_content = &actual[start + 3..terminator];
+            let expected_segment = &expected[start..expected_segment_end];
+            for required_removed in &indicator_counts {
+                if expected_segment.len() != actual_content.len() + required_removed {
+                    continue;
+                }
+                if matches_after_removing_capital_cells(
+                    expected_segment,
+                    actual_content,
+                    0,
+                    0,
+                    0,
+                    *required_removed,
+                    &mut BTreeSet::new(),
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Finds maximal all-caps ASCII runs containing the adjacent letters `OU`.
@@ -1454,6 +1743,110 @@ fn allcaps_shortform_prefix_spans(input: &str) -> Vec<InputSpan> {
     spans
 }
 
+/// Narrow the shortform-collision audit to a letters-sequence followed
+/// immediately by an opening round, square, or curly parenthesis. UEB 2.6.2
+/// permits these symbols before a standing-alone sequence, but the exhaustive
+/// following-symbol list in 2.6.3 does not permit them after one. Consequently
+/// 5.7.2/10.9.7 cannot introduce grade 1 merely because the capital sequence,
+/// considered in isolation, resembles a shortform.
+fn allcaps_shortform_before_nonstanding_opening_group_spans(input: &str) -> Vec<InputSpan> {
+    allcaps_shortform_prefix_spans(input)
+        .into_iter()
+        .filter(|span| {
+            input[span.end_byte..]
+                .chars()
+                .next()
+                .is_some_and(|ch| matches!(ch, '(' | '[' | '{'))
+        })
+        .collect()
+}
+
+fn nonstanding_shortform_capitals_ranges(
+    input: &str,
+    actual: &str,
+    spans: &[InputSpan],
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = BTreeSet::new();
+    for span in spans {
+        let mut letter_cells = String::new();
+        let mut valid = true;
+        for letter in input[span.start_byte..span.end_byte].chars() {
+            let Ok(encoded) =
+                braillify::encode_to_unicode(&letter.to_ascii_lowercase().to_string())
+            else {
+                valid = false;
+                break;
+            };
+            if encoded.chars().count() != 1 {
+                valid = false;
+                break;
+            }
+            letter_cells.push_str(&encoded);
+        }
+        if !valid {
+            continue;
+        }
+        let signature = format!("⠠⠠{letter_cells}");
+        for (start_byte, _) in actual.match_indices(&signature) {
+            let start = actual[..start_byte].chars().count();
+            ranges.insert((start, start + signature.chars().count()));
+        }
+    }
+    ranges.into_iter().map(|(start, end)| start..end).collect()
+}
+
+/// UEB 2.6.1-2.6.3 makes a letters-sequence followed immediately by an
+/// opening grouping sign not standing alone. This classifier accepts a corpus
+/// contradiction only when every difference in the complete sentence is an
+/// extra reference-side grade-1 cell immediately before the current capitals
+/// indicator of one of those structurally detected sequences.
+fn is_ueb_grade1_before_nonstanding_opening_parenthesis_reference_contradiction(
+    item: &EncodedCase,
+) -> bool {
+    let Ok(actual) = &item.actual else {
+        return false;
+    };
+    let expected = &item.located.case.unicode;
+    if actual == expected {
+        return false;
+    }
+
+    let spans = allcaps_shortform_before_nonstanding_opening_group_spans(&item.located.case.input);
+    if spans.is_empty() {
+        return false;
+    }
+
+    let expected_cells = expected.chars().collect::<Vec<_>>();
+    let actual_cells = actual.chars().collect::<Vec<_>>();
+    let mut expected_index = 0usize;
+    let mut actual_index = 0usize;
+    let mut removed_at_actual = Vec::new();
+    while expected_index < expected_cells.len() && actual_index < actual_cells.len() {
+        if expected_cells[expected_index] == actual_cells[actual_index] {
+            expected_index += 1;
+            actual_index += 1;
+            continue;
+        }
+        if expected_cells[expected_index] == '⠰' && actual_cells[actual_index] == '⠠' {
+            removed_at_actual.push(actual_index);
+            expected_index += 1;
+            continue;
+        }
+        return false;
+    }
+    if expected_index != expected_cells.len()
+        || actual_index != actual_cells.len()
+        || removed_at_actual.is_empty()
+    {
+        return false;
+    }
+
+    let ranges = nonstanding_shortform_capitals_ranges(&item.located.case.input, actual, &spans);
+    removed_at_actual
+        .iter()
+        .all(|position| ranges.iter().any(|range| range.contains(position)))
+}
+
 /// Finds maximal ASCII alphanumeric identifiers containing an immediate
 /// digit-to-uppercase transition (`O4O`, `Li2S`, `V2X`). The numeric indicator
 /// itself sets grade-1 mode under UEB 5.6.1, and 5.6.2 does not terminate that
@@ -1565,6 +1958,99 @@ fn pure_allcaps_hyphen_multi_allcaps_spans(input: &str) -> Vec<InputSpan> {
             })
         })
         .collect()
+}
+
+/// Mirrors the production grammar for an attached Korean-to-Roman hyphen
+/// boundary (`하쿠토-R`, `기장-KBO`) without consulting corpus braille.
+///
+/// The encoder selectively expands U+2160-U+217F Roman-numeral presentation
+/// characters before token routing, so this audit applies the same expansion
+/// (`천궁-Ⅱ` -> `천궁-II`). A capital initial or a multi-letter identifier
+/// distinguishes prose labels from a single lowercase algebra variable, while
+/// an explicit operator keeps the token in the mathematics cohort.
+fn is_korean_to_roman_hyphen_boundary_word(word: &str) -> bool {
+    let mut normalized = String::with_capacity(word.len());
+    for ch in word.chars() {
+        if (0x2160..=0x217f).contains(&(ch as u32)) {
+            normalized.extend(std::iter::once(ch).nfkc());
+        } else {
+            normalized.push(ch);
+        }
+    }
+    let chars = normalized.chars().collect::<Vec<_>>();
+
+    chars.windows(3).enumerate().any(|(index, window)| {
+        if !is_korean_script(window[0]) || window[1] != '-' || !window[2].is_ascii_alphabetic() {
+            return false;
+        }
+
+        let roman_tail = &chars[index + 2..];
+        let identifier_len = roman_tail
+            .iter()
+            .take_while(|ch| ch.is_ascii_alphanumeric())
+            .count();
+        let letter_count = roman_tail[..identifier_len]
+            .iter()
+            .filter(|ch| ch.is_ascii_alphabetic())
+            .count();
+        let identifier_is_unambiguous = window[2].is_ascii_uppercase() || letter_count >= 2;
+        let has_explicit_math_operator = roman_tail.iter().any(|ch| {
+            matches!(
+                *ch,
+                '+' | '−'
+                    | '×'
+                    | '÷'
+                    | '='
+                    | '<'
+                    | '>'
+                    | '≤'
+                    | '≥'
+                    | '≠'
+                    | '≈'
+                    | '^'
+                    | '_'
+                    | '/'
+                    | '*'
+                    | '|'
+                    | '∈'
+                    | '∉'
+                    | '⊂'
+                    | '⊃'
+                    | '∧'
+                    | '∨'
+            )
+        });
+
+        identifier_is_unambiguous && !has_explicit_math_operator
+    })
+}
+
+fn korean_to_roman_hyphen_boundary_spans(input: &str) -> Vec<InputSpan> {
+    let mut spans = Vec::new();
+    let mut token_start = None;
+    for (index, ch) in input.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(start_byte) = token_start.take()
+                && is_korean_to_roman_hyphen_boundary_word(&input[start_byte..index])
+            {
+                spans.push(InputSpan {
+                    start_byte,
+                    end_byte: index,
+                });
+            }
+        } else if token_start.is_none() {
+            token_start = Some(index);
+        }
+    }
+    if let Some(start_byte) = token_start
+        && is_korean_to_roman_hyphen_boundary_word(&input[start_byte..])
+    {
+        spans.push(InputSpan {
+            start_byte,
+            end_byte: input.len(),
+        });
+    }
+    spans
 }
 
 fn preceding_whitespace_word_contains_korean(input: &str, start_byte: usize) -> bool {
@@ -3843,6 +4329,10 @@ fn analyze(
             PendingRuleReviewClusterStats::default(),
         ),
         (
+            KOREAN_TO_ROMAN_HYPHEN_BOUNDARY.to_string(),
+            PendingRuleReviewClusterStats::default(),
+        ),
+        (
             ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD.to_string(),
             PendingRuleReviewClusterStats::default(),
         ),
@@ -4220,6 +4710,12 @@ fn analyze(
                 true,
             ),
             (
+                KOREAN_TO_ROMAN_HYPHEN_BOUNDARY,
+                !korean_to_roman_hyphen_boundary_spans(&item.located.case.input).is_empty(),
+                None,
+                false,
+            ),
+            (
                 ROMAN_HYPHENATED_WORD_AFTER_KOREAN_WORD,
                 !roman_hyphenated_word_after_korean_word_spans(&item.located.case.input).is_empty(),
                 Some(
@@ -4567,7 +5063,8 @@ fn markdown(report: &AnalysisReport) -> String {
          implementation obligation or a reproducible comparison/corpus issue is established. \
          `pending_rule_review` contains foreign-text, number, punctuation, and Korean candidates \
          that have not yet been resolved against the PDF. `corpus_suspect` is reserved for \
-         independently detectable contradictions such as one input having multiple references. \
+         independently detectable contradictions: conflicting duplicate references or a localized \
+         reference-cell signature that contradicts an explicit PDF/UEB rule. \
          `comparison_method` requires equality after a named normalization.\n\n",
     );
     text.push_str("| Primary class | Count |\n|---|---:|\n");
@@ -5063,6 +5560,33 @@ fn markdown(report: &AnalysisReport) -> String {
          regression. Digit-hyphen forms such as `F-35` remain excluded, and the \
          complete-shortform guard still legitimately precedes `CD` in `CD-ROM`.\n\n",
     );
+    let korean_to_roman_hyphen = report
+        .pending_rule_review_clusters
+        .get(KOREAN_TO_ROMAN_HYPHEN_BOUNDARY)
+        .expect("registered Korean-to-Roman hyphen cohort must exist");
+    let exact_with_separator = format!("{},{:03}", report.exact / 1_000, report.exact % 1_000);
+    text.push_str("### Attached Korean-to-Roman hyphen boundary\n\n");
+    text.push_str(&format!(
+        "Korean rule 29 opens a Roman section for Roman text in a Korean sentence, rule 33 \
+         keeps the hyphen as punctuation at the Korean/Roman boundary, and rules 35-36 own \
+         adjacent alphanumerics and Roman numerals. The retained production gate therefore \
+         routes an immediately attached capital-led or multi-letter Roman identifier as prose \
+         (`하쿠토-R`, `기장-KBO`, `온다-life`), but leaves a single lowercase variable and any \
+         token with an explicit mathematical operator on the mathematics route (`값-x`, \
+         `값-X+1`). The analyzer applies the encoder's selective U+2160-U+217F compatibility \
+         expansion before testing the word grammar, so `천궁-Ⅱ` is audited as the equivalent \
+         `천궁-II` boundary.\n\n\
+         Before this gate, the deterministic cohort contained 105 candidates / 62 exact / 43 \
+         mismatch. It now contains {} candidates / {} exact / {} mismatch. The complete \
+         corpus exact-ID audit moved from 75,704 to {} (+22), and every new exact ID belongs \
+         to this cohort; no formerly exact ID was lost. Cohort membership is input-only and \
+         never changes a primary class, so the remaining non-exact members retain their \
+         independent review causes.\n\n",
+        korean_to_roman_hyphen.candidates,
+        korean_to_roman_hyphen.exact,
+        korean_to_roman_hyphen.mismatch,
+        exact_with_separator
+    ));
     text.push_str("\n## Roman-entry residual cohorts after grade-1 localization\n\n");
     text.push_str(
         "These three cohorts split the former dominant `⠴ -> blank` residual by the input \
@@ -6584,9 +7108,9 @@ fn markdown(report: &AnalysisReport) -> String {
         .pending_rule_review_clusters
         .get(KOREAN_PREFIXED_CLOSED_ROMAN_ANNOTATION)
     {
-        let corpus_suspect = stats
-            .mismatch_primary_classes
-            .get("corpus_suspect")
+        let rule_34_reference_conflicts = report
+            .reasons
+            .get("rule34_roman_indicator_before_opening_parenthesis")
             .copied()
             .unwrap_or(0);
         let opposite_order = stats
@@ -6601,7 +7125,8 @@ fn markdown(report: &AnalysisReport) -> String {
              {opposite_order} localized first-cell transitions have the reference/current order \
              `⠴` versus `⠦`. After requiring the complete reference `⠴⠐⠣` versus current/PDF \
              `⠦⠄⠴` three-cell signature and preserving higher-priority comparison \
-             classifications, {corpus_suspect} are classified as `corpus_suspect`; mere \
+             classifications, {rule_34_reference_conflicts} are classified with the dedicated \
+             rule-34 contradiction reason; mere \
              coexistence with a Korean-prefixed Roman annotation does not change a primary \
              class.\n",
             stats.candidates,
@@ -6611,6 +7136,43 @@ fn markdown(report: &AnalysisReport) -> String {
             stats.output_signature_mismatches_evaluated
         ));
     }
+    text.push_str(
+        "\nNIKL Q&A #325 clarifies that the six lower wordsigns named by Korean Rule 37 \
+         remain expanded when Roman words are discussed in Korean context, while a recognizable \
+         English title or phrase follows UEB 10.5 and uses a lower wordsign only when it stands \
+         alone and satisfies the lower-sign adjacency restriction. The encoder distinguishes \
+         those contexts from input structure, capitalization, and enclosure boundaries; analyzer \
+         references and competitor fields do not affect routing.\n",
+    );
+    let nonstanding_parenthesis_grade1_reference_conflicts = report
+        .reasons
+        .get("ueb_grade1_before_nonstanding_opening_parenthesis")
+        .copied()
+        .unwrap_or(0);
+    text.push_str(&format!(
+        "\nCurrent UEB non-standing parenthesis/grade-1 contradiction measurement: \
+         {nonstanding_parenthesis_grade1_reference_conflicts} cases contain an all-capitals \
+         letters-sequence that resembles a shortform but is followed immediately by an opening \
+         round, square, or curly parenthesis. UEB 2.6.2 permits those opening symbols before a \
+         standing-alone sequence, while 2.6.3 does not permit them after one. The classifier \
+         requires complete-sentence equality after removing only reference-side grade-1 cells \
+         immediately before the localized capitals indicators; all other differences remain \
+         pending review.\n"
+    ));
+    let capitalized_passage_reference_conflicts = report
+        .reasons
+        .get("ueb_capitalized_passage_written_as_separate_capital_words")
+        .copied()
+        .unwrap_or(0);
+    text.push_str(&format!(
+        "\nCurrent UEB capitalized-passage contradiction measurement: \
+         {capitalized_passage_reference_conflicts} cases contain at least three consecutive \
+         capitalized symbols-sequences and differ from the current UEB 8.5.2-8.5.3 path only \
+         by replacing the one passage indicator/terminator pair with separate one- or two-cell \
+         capitalization indicators. The classifier requires equality of the complete sentence \
+         after deleting exactly those structurally counted separate indicators; unrelated \
+         Roman, punctuation, contraction, or spacing differences remain pending review.\n"
+    ));
     if let Some(stats) = report
         .pending_rule_review_clusters
         .get(ALLCAPS_ROMAN_MIDDLE_DOT_RUNS)
@@ -7850,7 +8412,8 @@ mod tests {
     #[case::whole_shortform("가(WD) 나", vec!["WD"])]
     #[case::longer_prefixes("PDS LLM GDP", vec!["PDS", "LLM", "GDP"])]
     #[case::ueb_examples("ALT NEC LLC", vec!["ALT", "NEC", "LLC"])]
-    #[case::noncolliding_controls("US KBS MCH", vec![])]
+    #[case::shortform_much("MCH", vec!["MCH"])]
+    #[case::noncolliding_controls("US KBS", vec![])]
     #[case::alphanumeric_excluded("O4O Li2S V2X", vec![])]
     fn detects_allcaps_shortform_prefix_collisions(
         #[case] input: &str,
@@ -7904,6 +8467,26 @@ mod tests {
         #[case] expected: Vec<&str>,
     ) {
         let actual = pure_allcaps_hyphen_multi_allcaps_spans(input)
+            .into_iter()
+            .map(|span| &input[span.start_byte..span.end_byte])
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::single_capital("오는 하쿠토-R 미션", vec!["하쿠토-R"])]
+    #[case::multi_capital("기장-KBO 야구센터", vec!["기장-KBO"])]
+    #[case::uppercase_sequence("한-UAE 협력", vec!["한-UAE"])]
+    #[case::normalized_roman_numeral("천궁-Ⅱ 미사일", vec!["천궁-Ⅱ"])]
+    #[case::lowercase_word("봄은 온다-life goes on", vec!["온다-life"])]
+    #[case::single_lowercase_math_control("값-x 계산", vec![])]
+    #[case::explicit_operator_control("값-X+1 계산", vec![])]
+    #[case::digit_control("한-3 단계", vec![])]
+    fn detects_attached_korean_to_roman_hyphen_boundary(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let actual = korean_to_roman_hyphen_boundary_spans(input)
             .into_iter()
             .map(|span| &input[span.start_byte..span.end_byte])
             .collect::<Vec<_>>();
@@ -8107,7 +8690,7 @@ mod tests {
     #[rstest::rstest]
     #[case::short_digit_exact_control("웹3(Web3)", '⠦')]
     #[case::after_whitespace("전시회 (Moulding Expo)", '⠴')]
-    #[case::after_quote("선언’(Washington Declaration)", '⠴')]
+    #[case::after_quote("선언’(Washington Declaration)", '⠦')]
     fn locates_nonletter_parenthetical_opening_in_current_output(
         #[case] input: &str,
         #[case] expected_opening: char,
@@ -8131,14 +8714,28 @@ mod tests {
     #[case::attached_middle_dot_suffix(
         "10~11일에는 지역 주민들과 함께 하는 전야제를 포함해 아주대 50년사 출판 기념보고회, 인공지능(AI)·6G 융합 콜로키움 시리즈가 열린다."
     )]
-    fn localizes_current_two_blank_boundary_before_roman_parenthetical(#[case] input: &str) {
+    fn localizes_current_rule34_boundary_before_roman_parenthetical(#[case] input: &str) {
         let spans = roman_parenthetical_after_nonletter_boundary_spans(input);
         let actual = braillify::encode_to_unicode(input).expect("parenthetical probe must encode");
         let ranges = current_engine_parenthetical_leading_boundary_ranges(input, &actual, &spans);
 
         assert!(!spans.is_empty());
+        assert!(!ranges.is_empty());
         assert!(ranges.iter().any(|range| {
-            actual.chars().skip(range.start).take(3).collect::<String>() == "⠀⠀⠦"
+            actual
+                .chars()
+                .skip(range.start)
+                .take(range.len())
+                .collect::<String>()
+                .contains("⠦⠄⠴")
+        }));
+        assert!(!ranges.iter().any(|range| {
+            actual
+                .chars()
+                .skip(range.start)
+                .take(range.len())
+                .collect::<String>()
+                .contains("⠀⠀⠦")
         }));
     }
 
@@ -8305,6 +8902,189 @@ mod tests {
             (
                 PrimaryClass::CorpusSuspect,
                 Reason::Rule34RomanIndicatorBeforeOpeningParenthesis
+            )
+        );
+    }
+
+    #[test]
+    fn classifies_korean_cells_for_an_enclosed_roman_ellipsis_as_corpus_suspect() {
+        let input = "제목(Love Is…)까지";
+        let actual = braillify::encode_to_unicode(input).expect("Roman ellipsis probe must encode");
+        assert!(actual.contains("⠲⠲⠲"));
+        let expected = actual.replacen("⠲⠲⠲", "⠠⠠⠠", 1);
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected,
+                },
+            },
+            actual: Ok(actual),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+
+        assert!(is_roman_ellipsis_reference_contradiction(&encoded));
+        assert_eq!(
+            classify(&encoded, &BTreeSet::new()),
+            (
+                PrimaryClass::CorpusSuspect,
+                Reason::RomanEllipsisUsesKoreanCellsInRomanEnclosure
+            )
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::round_shortform("가 PDS(설명) 나", false, true)]
+    #[case::square_shortform("가 PDS[설명] 나", false, true)]
+    #[case::curly_shortform("가 PDS{설명} 나", false, true)]
+    #[case::standing_sequence("가 PDS 설명", false, false)]
+    #[case::plain_initialism("가 KBS(설명) 나", false, false)]
+    #[case::unrelated_difference("가 PDS(설명) 나", true, false)]
+    fn recognizes_only_extra_grade1_before_nonstanding_opening_parenthesis(
+        #[case] input: &str,
+        #[case] add_unrelated_difference: bool,
+        #[case] expected_result: bool,
+    ) {
+        let actual = braillify::encode_to_unicode(input).expect("grade-1 probe must encode");
+        let capitals = actual
+            .find("⠠⠠")
+            .expect("probe must contain a capitals-word indicator");
+        let mut expected = format!("{}⠰{}", &actual[..capitals], &actual[capitals..]);
+        if add_unrelated_difference {
+            expected.push('⠁');
+        }
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected,
+                },
+            },
+            actual: Ok(actual),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+
+        assert_eq!(
+            is_ueb_grade1_before_nonstanding_opening_parenthesis_reference_contradiction(&encoded),
+            expected_result
+        );
+    }
+
+    #[test]
+    fn classifies_extra_grade1_before_nonstanding_opening_parenthesis_as_corpus_suspect() {
+        let input = "가 PDS(설명) 나";
+        let actual = braillify::encode_to_unicode(input).expect("grade-1 probe must encode");
+        let capitals = actual
+            .find("⠠⠠")
+            .expect("probe must contain a capitals-word indicator");
+        let expected = format!("{}⠰{}", &actual[..capitals], &actual[capitals..]);
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected,
+                },
+            },
+            actual: Ok(actual),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+
+        assert_eq!(
+            classify(&encoded, &BTreeSet::new()),
+            (
+                PrimaryClass::CorpusSuspect,
+                Reason::UebGrade1BeforeNonstandingOpeningParenthesis
+            )
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::caution_wet_paint(
+        "CAUTION: WET PAINT!",
+        "⠠⠠⠠⠉⠁⠥⠞⠊⠕⠝⠒⠀⠺⠑⠞⠀⠏⠁⠊⠝⠞⠖⠠⠄",
+        "⠠⠠⠉⠁⠥⠞⠊⠕⠝⠒⠀⠠⠠⠺⠑⠞⠀⠠⠠⠏⠁⠊⠝⠞⠖",
+        true
+    )]
+    #[case::bbc_africa_news(
+        "THE BBC AFRICA NEWS",
+        "⠠⠠⠠⠞⠓⠑⠀⠃⠃⠉⠀⠁⠋⠗⠊⠉⠁⠀⠝⠑⠺⠎⠠⠄",
+        "⠠⠠⠞⠓⠑⠀⠠⠠⠃⠃⠉⠀⠠⠠⠁⠋⠗⠊⠉⠁⠀⠠⠠⠝⠑⠺⠎",
+        true
+    )]
+    #[case::self_made_man(
+        "A SELF-MADE MAN",
+        "⠠⠠⠠⠁⠀⠎⠑⠇⠋⠤⠍⠁⠙⠑⠀⠍⠁⠝⠠⠄",
+        "⠠⠁⠀⠠⠠⠎⠑⠇⠋⠤⠍⠁⠙⠑⠀⠠⠠⠍⠁⠝",
+        true
+    )]
+    #[case::only_two_sequences("WET PAINT!", "⠠⠠⠠⠺⠑⠞⠀⠏⠁⠊⠝⠞⠖⠠⠄", "⠠⠠⠺⠑⠞⠀⠠⠠⠏⠁⠊⠝⠞⠖", false)]
+    #[case::unrelated_content_difference(
+        "CAUTION: WET PAINT!",
+        "⠠⠠⠠⠉⠁⠥⠞⠊⠕⠝⠒⠀⠺⠑⠞⠀⠏⠁⠊⠝⠞⠖⠠⠄",
+        "⠠⠠⠉⠁⠥⠞⠊⠕⠝⠒⠀⠠⠠⠺⠑⠞⠀⠠⠠⠏⠁⠊⠝⠭⠖",
+        false
+    )]
+    fn recognizes_only_complete_ueb_capitals_passage_marker_substitutions(
+        #[case] input: &str,
+        #[case] actual: &str,
+        #[case] expected: &str,
+        #[case] expected_result: bool,
+    ) {
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: input.to_string(),
+                    unicode: expected.to_string(),
+                },
+            },
+            actual: Ok(actual.to_string()),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+
+        assert_eq!(
+            is_ueb_capitalized_passage_reference_contradiction(&encoded),
+            expected_result
+        );
+    }
+
+    #[test]
+    fn classifies_separate_capital_words_for_a_ueb_passage_as_corpus_suspect() {
+        let encoded = EncodedCase {
+            located: LocatedCase {
+                shard: "synthetic.json".to_string(),
+                index: 1,
+                case: CorpusCase {
+                    input: "A SELF-MADE MAN".to_string(),
+                    unicode: "⠠⠁⠀⠠⠠⠎⠑⠇⠋⠤⠍⠁⠙⠑⠀⠠⠠⠍⠁⠝".to_string(),
+                },
+            },
+            actual: Ok("⠠⠠⠠⠁⠀⠎⠑⠇⠋⠤⠍⠁⠙⠑⠀⠍⠁⠝⠠⠄".to_string()),
+            nfc_actual: None,
+            nfkc_actual: None,
+            singleton_unsupported_characters: Vec::new(),
+        };
+
+        assert_eq!(
+            classify(&encoded, &BTreeSet::new()),
+            (
+                PrimaryClass::CorpusSuspect,
+                Reason::UebCapitalizedPassageWrittenAsSeparateCapitalWords
             )
         );
     }

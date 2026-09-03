@@ -274,6 +274,27 @@ fn count_script_words(tokens: &[Token<'_>]) -> (usize, usize) {
     (english_words, korean_words)
 }
 
+/// Rule 39 applies to a Roman-main sentence, not merely a Korean sentence that
+/// contains a long Roman citation. The first lexical script is a stable matrix-
+/// language signal: the PDF's Roman-main examples begin in Roman script, while
+/// its Korean domain-name example is handled by the same-token domain rule.
+fn document_begins_in_roman_script(tokens: &[Token<'_>]) -> bool {
+    tokens.iter().find_map(|token| {
+        let Token::Word(word) = token else {
+            return None;
+        };
+        word.chars.iter().find_map(|ch| {
+            if ch.is_ascii_alphabetic() {
+                Some(true)
+            } else if is_korean_char(*ch) {
+                Some(false)
+            } else {
+                None
+            }
+        })
+    }) == Some(true)
+}
+
 /// Compute all document-level English-Korean predicates once per encode call.
 pub fn compute_document_summary(tokens: &[Token<'_>]) -> DocumentSummary {
     let candidates = scan_english_context_candidates(tokens);
@@ -282,9 +303,11 @@ pub fn compute_document_summary(tokens: &[Token<'_>]) -> DocumentSummary {
     }
 
     let (english_words, korean_words) = count_script_words(tokens);
-    let is_english_majority = english_words >= korean_words.max(1);
+    let is_roman_main =
+        document_begins_in_roman_script(tokens) && english_words >= korean_words.max(1);
+    let is_english_majority = is_roman_main;
     let is_english_dominant =
-        english_words >= 10 && english_words >= korean_words.saturating_mul(5);
+        is_roman_main && english_words >= 10 && english_words >= korean_words.saturating_mul(5);
     let has_english_context_for_korean = candidates.has_same_token_context
         || (candidates.has_boundary_candidate && is_english_majority);
 
@@ -521,6 +544,33 @@ mod tests {
         assert_eq!(eng, 2);
         assert_eq!(kor, 1);
         // The "123" word's first_script_char Some('1') hits `_ => {}` (not counted).
+    }
+
+    #[rstest::rstest]
+    #[case::roman_main("2024 What is 김치 in English?", true)]
+    #[case::korean_main_with_long_roman_citation(
+        "익수다의 주요 ADC 프로그램은 IKS012(Anti-Folate Receptor Alpha (FRa)) ADC와 함께한다.",
+        false
+    )]
+    #[case::korean_domain_exception("대통령실 주소는 www.대통령.kr이다.", false)]
+    fn detects_the_matrix_script_from_the_first_lexical_script(
+        #[case] input: &str,
+        #[case] expected: bool,
+    ) {
+        let ir = crate::rules::token::DocumentIR::parse(input, true);
+        assert_eq!(document_begins_in_roman_script(&ir.tokens), expected);
+    }
+
+    #[test]
+    fn korean_main_sentence_does_not_become_rule_39_from_a_long_roman_citation() {
+        let input =
+            "익수다의 주요 ADC 프로그램은 IKS012(Anti-Folate Receptor Alpha (FRa)) ADC와 함께한다.";
+        let ir = crate::rules::token::DocumentIR::parse(input, true);
+
+        let summary = compute_document_summary(&ir.tokens);
+
+        assert!(!summary.is_english_majority);
+        assert!(!summary.is_english_dominant);
     }
 
     /// english_dominant_korean_wrap:311 — `(true, true) =>` arm of the boundary

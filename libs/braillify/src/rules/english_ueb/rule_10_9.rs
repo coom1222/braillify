@@ -43,9 +43,84 @@ pub fn whole_word_cells(word: &str) -> Option<Vec<u8>> {
 /// A literal all-letter abbreviation that collides with a pure-letter shortform
 /// needs a grade-1 indicator before normal letter encoding (§10.9.7).
 pub fn is_pure_shortform_abbreviation(word: &str) -> bool {
+    let letters = word.chars().collect::<Vec<_>>();
+    if letters.len() < 2 || !letters.iter().all(char::is_ascii_lowercase) {
+        return false;
+    }
+    let Some(literal_cells) = korean_letter_sequence_cells(&letters) else {
+        return false;
+    };
+
     SHORTFORMS
         .values()
-        .any(|abbr| abbr.chars().all(|ch| ch.is_ascii_lowercase()) && *abbr == word)
+        .any(|notation| notation_cells(notation).as_deref() == Some(literal_cells.as_slice()))
+}
+
+/// UEB 5.7.2 and 10.9.7-10.9.8: returns whether an ASCII letters-sequence at
+/// the beginning of a word needs a grade-1 symbol before its capitalization
+/// indicator so it cannot be read as a shortform, or as the beginning of a
+/// longer word containing one.
+///
+/// This compares cells produced by the ordinary rule-37 groupsign encoder with
+/// the complete shortform table. Consequently sequences containing groupsigns
+/// are handled without a second hand-maintained alias list: `FST` collides with
+/// `first` (`f` + `st`), `SHD` with `should`, while `BC` does not collide with
+/// `because` (`be` + `c`). For a proper prefix, the existing 10.9.2-10.9.5
+/// longer-word grammar decides whether that shortform reading is actually
+/// permitted; this is why the official `LLC` is guarded but `LLAMA` is not.
+pub fn requires_grade1_at_word_start(letters: &str) -> bool {
+    let lower = letters.to_ascii_lowercase();
+    let chars = lower.chars().collect::<Vec<_>>();
+    if chars.len() < 2 || !letters.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return false;
+    }
+
+    for end in 2..=chars.len() {
+        let Some(prefix_cells) = korean_letter_sequence_cells(&chars[..end]) else {
+            continue;
+        };
+        for (shortform, notation) in SHORTFORMS.entries() {
+            if notation_cells(notation).as_deref() != Some(prefix_cells.as_slice()) {
+                continue;
+            }
+            if end == chars.len() {
+                return true;
+            }
+
+            let suffix = &chars[end..];
+            // §10.9.5 admits an added `s` for every base shortform except
+            // `abouts`, `almosts`, and `hims`.
+            if suffix == ['s'] && !matches!(*shortform, "about" | "almost" | "him") {
+                return true;
+            }
+
+            let hypothetical = shortform
+                .chars()
+                .chain(suffix.iter().copied())
+                .collect::<Vec<_>>();
+            if longer_use_allowed(&hypothetical, 0, shortform) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Produce the cells that the real Korean-rule-37 Roman body encoder would emit
+/// for a lowercase ASCII letters-sequence.  Grade-1 collision detection must use
+/// this exact path: a default [`ContractionEngine`] contains no registered rules
+/// and would consequently miss cell-equivalent sequences such as `fst` (`f` +
+/// the `st` groupsign) and `shd` (the `sh` groupsign + `d`).
+fn korean_letter_sequence_cells(letters: &[char]) -> Option<Vec<u8>> {
+    super::span::encode_korean_word(
+        letters, true,  // capitalization indicators are compared separately
+        false, // do not recursively prepend grade 1
+        false, // rule 37 suppresses whole-word signs on Roman entry
+        true,  // the sequence begins at a Roman word boundary
+        false, // no adjacent digit in a pure letters-sequence
+        false, // no numeric grade-1 mode in a pure letters-sequence
+        false, // not split by an apostrophe
+    )
 }
 
 /// Encode a word as the §10.10.2 cell-minimising contraction sequence.
