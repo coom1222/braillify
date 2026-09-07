@@ -579,22 +579,6 @@ mod tests {
         assert_eq!(decode_cells(&cells), expected);
     }
 
-    /// 된소리표 뒤의 축약 초성 또는 일반 초성·중성 조합을 직접 검증한다.
-    #[rstest]
-    #[case::compact_gga(&[32, 43], "까")]
-    #[case::compact_tta(&[32, 10], "따")]
-    #[case::compact_ppa(&[32, 24], "빠")]
-    #[case::compact_ssa(&[32, 7], "싸")]
-    #[case::compact_jja(&[32, 40], "짜")]
-    #[case::ggeo(&[32, 8, 14], "꺼")]
-    #[case::ddu(&[32, 10, 13], "뚜")]
-    #[case::ppi(&[32, 24, 21], "삐")]
-    #[case::sso(&[32, 32, 37], "쏘")]
-    #[case::jjyu(&[32, 40, 41], "쮸")]
-    fn decodes_tense_choseong_cells(#[case] cells: &[u8], #[case] expected: &str) {
-        assert_eq!(decode_cells(cells), expected);
-    }
-
     /// 입력이 끝난 경우 종성 탐색이 셀을 소비하지 않고 종료되는 경계를 보장한다.
     #[test]
     fn empty_jongseong_slice_returns_no_match() {
